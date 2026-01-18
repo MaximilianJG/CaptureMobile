@@ -149,17 +149,37 @@ Be thorough but accurate - only report events you're confident about."""
         
         event_info = None
         if found_event and event_info_data:
+            # Date is required - if missing, we can't create an event
+            date = event_info_data.get("date")
+            if not date:
+                print("⚠️ No date found in event info - cannot create event")
+                return OpenAIAnalysisResult(
+                    found_event=False,
+                    event_info=None,
+                    raw_text=raw_text
+                )
+            
+            # Title fallback
+            title = event_info_data.get("title") or "Event"
+            
+            # Smart is_all_day: if no start_time provided, treat as all-day
+            start_time = event_info_data.get("start_time")
+            is_all_day = event_info_data.get("is_all_day", False)
+            if not start_time and not is_all_day:
+                is_all_day = True
+            
             try:
                 event_info = ExtractedEventInfo(
-                    title=event_info_data.get("title", "Untitled Event"),
-                    date=event_info_data.get("date", ""),
-                    start_time=event_info_data.get("start_time"),
+                    title=title,
+                    date=date,
+                    start_time=start_time,
                     end_time=event_info_data.get("end_time"),
                     location=event_info_data.get("location"),
                     description=event_info_data.get("description"),
-                    timezone=event_info_data.get("timezone", "UTC"),
-                    is_all_day=event_info_data.get("is_all_day", False),
-                    confidence=event_info_data.get("confidence", 0.5)
+                    timezone=event_info_data.get("timezone", "Europe/Berlin"),
+                    is_all_day=is_all_day,
+                    confidence=event_info_data.get("confidence", 0.5),
+                    attendee_name=event_info_data.get("attendee_name"),
                 )
             except Exception as e:
                 print(f"Failed to parse event info: {e}")

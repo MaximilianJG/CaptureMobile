@@ -51,15 +51,16 @@ class HealthResponse(BaseModel):
 
 class ExtractedEventInfo(BaseModel):
     """Event information extracted from screenshot by OpenAI."""
-    title: str = Field(..., description="Event title")
-    date: str = Field(..., description="Event date (YYYY-MM-DD format)")
+    title: str = Field(..., description="Event title")  # Required
+    date: str = Field(..., description="Event date (YYYY-MM-DD format)")  # Required
     start_time: Optional[str] = Field(None, description="Start time (HH:MM format, 24h)")
     end_time: Optional[str] = Field(None, description="End time (HH:MM format, 24h)")
     location: Optional[str] = Field(None, description="Event location if mentioned")
     description: Optional[str] = Field(None, description="Additional details or notes")
-    timezone: Optional[str] = Field("UTC", description="Timezone if mentioned")
+    timezone: Optional[str] = Field("Europe/Berlin", description="Timezone if mentioned")
     is_all_day: bool = Field(False, description="Whether this is an all-day event")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score 0-1")
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0, description="Confidence score 0-1")
+    attendee_name: Optional[str] = Field(None, description="Name of the other person involved")
 
 
 class OpenAIAnalysisResult(BaseModel):

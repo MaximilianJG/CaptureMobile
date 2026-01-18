@@ -133,12 +133,12 @@ async def analyze_screenshot(request: AnalyzeScreenshotRequest):
         
         event_info = analysis_result.event_info
         print(f"[{timestamp}] ✅ EVENT DETECTED:")
-        print(f"    📌 Title: {event_info.title}")
-        print(f"    📅 Date: {event_info.date}")
+        print(f"    📌 Title: {event_info.title or 'Untitled'}")
+        print(f"    📅 Date: {event_info.date or 'Unknown'}")
         print(f"    🕐 Time: {event_info.start_time or 'All day'} - {event_info.end_time or 'N/A'}")
         print(f"    📍 Location: {event_info.location or 'None'}")
-        print(f"    👤 Attendee: {event_info.attendee_name or 'None'}")
-        print(f"    🎯 Confidence: {event_info.confidence:.0%}")
+        print(f"    👤 Attendee: {getattr(event_info, 'attendee_name', None) or 'None'}")
+        print(f"    🎯 Confidence: {(event_info.confidence or 0.5):.0%}")
         
         # Step 3: Create calendar event
         print(f"[{timestamp}] 📅 Creating calendar event...")
