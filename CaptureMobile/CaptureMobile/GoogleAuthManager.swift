@@ -30,7 +30,21 @@ class GoogleAuthManager: ObservableObject {
     }
     
     private init() {
-        // Check if user was previously signed in
+        // Check keychain synchronously FIRST to prevent flash of auth view
+        if let email = keychain.readString(forKey: .userEmail),
+           let name = keychain.readString(forKey: .userName) {
+            let profileURLString = keychain.readString(forKey: .userProfileURL)
+            let profileURL = profileURLString.flatMap { URL(string: $0) }
+            
+            self.currentUser = UserProfile(
+                email: email,
+                name: name,
+                profileImageURL: profileURL
+            )
+            self.isSignedIn = true
+        }
+        
+        // Then restore Google session in background (validates/refreshes tokens)
         restorePreviousSignIn()
     }
     

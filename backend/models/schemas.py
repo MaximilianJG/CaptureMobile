@@ -60,7 +60,6 @@ class ExtractedEventInfo(BaseModel):
     timezone: Optional[str] = Field("UTC", description="Timezone if mentioned")
     is_all_day: bool = Field(False, description="Whether this is an all-day event")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score 0-1")
-    attendee_name: Optional[str] = Field(None, description="Name of the other person involved")
 
 
 class OpenAIAnalysisResult(BaseModel):

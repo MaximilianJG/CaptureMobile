@@ -98,21 +98,33 @@ async def analyze_screenshot(request: AnalyzeScreenshotRequest):
     Returns:
         Success status, created event details, and status message
     """
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(f"\n{'='*50}")
+    print(f"[{timestamp}] 📸 NEW CAPTURE REQUEST")
+    print(f"{'='*50}")
+    
     try:
         # Step 1: Validate Google token and get user info
         user_info = await calendar_service.validate_token(request.access_token)
         if not user_info:
+            print(f"[{timestamp}] ❌ AUTH ERROR: Invalid or expired token")
+            print(f"{'='*50}\n")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired Google access token"
             )
         
-        print(f"📸 Processing screenshot for user: {user_info.get('email', 'unknown')}")
+        user_email = user_info.get('email', 'unknown')
+        print(f"[{timestamp}] ✅ AUTH OK: {user_email}")
         
         # Step 2: Analyze screenshot with OpenAI Vision
+        print(f"[{timestamp}] 🤖 Analyzing screenshot with AI...")
         analysis_result = await openai_service.analyze_screenshot(request.image)
         
         if not analysis_result.found_event:
+            print(f"[{timestamp}] ⚠️  NO EVENT FOUND in screenshot")
+            print(f"[{timestamp}] 📝 Raw text: {analysis_result.raw_text[:100] if analysis_result.raw_text else 'None'}...")
+            print(f"{'='*50}\n")
             return AnalyzeScreenshotResponse(
                 success=False,
                 event_created=None,
@@ -120,15 +132,24 @@ async def analyze_screenshot(request: AnalyzeScreenshotRequest):
             )
         
         event_info = analysis_result.event_info
-        print(f"🎯 Found event: {event_info.title} on {event_info.date}")
+        print(f"[{timestamp}] ✅ EVENT DETECTED:")
+        print(f"    📌 Title: {event_info.title}")
+        print(f"    📅 Date: {event_info.date}")
+        print(f"    🕐 Time: {event_info.start_time or 'All day'} - {event_info.end_time or 'N/A'}")
+        print(f"    📍 Location: {event_info.location or 'None'}")
+        print(f"    👤 Attendee: {event_info.attendee_name or 'None'}")
+        print(f"    🎯 Confidence: {event_info.confidence:.0%}")
         
         # Step 3: Create calendar event
+        print(f"[{timestamp}] 📅 Creating calendar event...")
         created_event = await calendar_service.create_event(
             access_token=request.access_token,
             event_info=event_info
         )
         
         if not created_event:
+            print(f"[{timestamp}] ❌ CALENDAR ERROR: Failed to create event")
+            print(f"{'='*50}\n")
             return AnalyzeScreenshotResponse(
                 success=False,
                 event_created=None,
@@ -156,6 +177,10 @@ async def analyze_screenshot(request: AnalyzeScreenshotRequest):
             calendar_link=created_event.get("htmlLink")
         )
         
+        print(f"[{timestamp}] ✅ SUCCESS: Event created!")
+        print(f"    🔗 Link: {created_event.get('htmlLink')}")
+        print(f"{'='*50}\n")
+        
         return AnalyzeScreenshotResponse(
             success=True,
             event_created=event_details,
@@ -165,7 +190,8 @@ async def analyze_screenshot(request: AnalyzeScreenshotRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Error processing screenshot: {str(e)}")
+        print(f"[{timestamp}] ❌ SERVER ERROR: {str(e)}")
+        print(f"{'='*50}\n")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process screenshot: {str(e)}"

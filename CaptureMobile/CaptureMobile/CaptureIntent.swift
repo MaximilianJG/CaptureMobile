@@ -74,11 +74,11 @@ struct CaptureShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: CaptureScreenshotIntent(),
             phrases: [
-                "Capture screenshot with \(.applicationName)",
+                "Send to \(.applicationName)",
                 "Send screenshot to \(.applicationName)",
                 "Create event from screenshot with \(.applicationName)"
             ],
-            shortTitle: "Capture Screenshot",
+            shortTitle: "Send to Capture",
             systemImageName: "camera.viewfinder"
         )
     }

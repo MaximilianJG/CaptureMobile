@@ -188,19 +188,39 @@ struct HomeView: View {
     
     // MARK: - Re-add Shortcut Link (subtle, always visible)
     private var reAddShortcutLink: some View {
-        Button(action: {
-            ShortcutManager.shared.installShortcut()
-            shortcutCreated = true
-        }) {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 12))
-                Text("Re-add Shortcut")
-                    .font(.system(size: 13))
+        HStack(spacing: 16) {
+            Button(action: {
+                ShortcutManager.shared.installShortcut()
+                shortcutCreated = true
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12))
+                    Text("Re-add Shortcut")
+                        .font(.system(size: 13))
+                }
+                .foregroundStyle(.secondary)
             }
-            .foregroundStyle(.secondary)
+            .buttonStyle(.plain)
+            
+            Text("·")
+                .foregroundStyle(.quaternary)
+            
+            Button(action: {
+                if let url = URL(string: "https://maximilianglasmacher.notion.site/2d037e9160b7805faf48c8daed29daa7?pvs=105") {
+                    UIApplication.shared.open(url)
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "bubble.left")
+                        .font(.system(size: 12))
+                    Text("Send Feedback")
+                        .font(.system(size: 13))
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
         .padding(.top, 8)
     }
 }
