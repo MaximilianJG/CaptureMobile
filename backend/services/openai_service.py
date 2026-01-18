@@ -92,54 +92,77 @@ class OpenAIService:
         day_of_week = now.strftime("%A")
         current_year = now.year
         
-        return f"""You are an expert at analyzing images and extracting event information.
+        return f"""You are an expert at analyzing images and extracting calendar-worthy information.
 
 TODAY'S DATE: {today_str} ({day_of_week})
 CURRENT YEAR: {current_year}
 
-Your task is to look at screenshots and identify any calendar events, meetings, appointments, or scheduled activities.
+Your task is to look at screenshots and identify anything that should go on a calendar.
 
-Look for:
-- Event titles/names
-- Dates (specific dates or relative like "tomorrow", "next Monday")
-- Times (start time, end time)
-- Locations (physical addresses, meeting rooms, virtual meeting links)
-- Additional details or descriptions
+=== WHAT TO LOOK FOR ===
+- Events, meetings, appointments, scheduled activities
+- DEADLINES ("due by", "closes at", "submit before", "deadline", "last day")
+- Reminders about time-sensitive actions
+- Reservations, bookings, tickets with dates/times
+- Any date + time combination that someone would want to remember
 
-IMPORTANT DATE RULES:
+=== EXTRACT THESE DETAILS ===
+- Title/subject
+- Date (specific or relative like "tomorrow", "next Monday")
+- Time (even if phrased as "at 2pm", "by 5pm", "before noon")
+- Location if mentioned
+- Additional context
+
+=== DEADLINE HANDLING ===
+Deadlines ARE events! They belong on a calendar.
+- "Platform closes at 2pm" → start_time: "14:00"
+- "Due by 5pm" → start_time: "17:00"
+- "Submit before midnight" → start_time: "23:59"
+- For deadlines, prefix the title with "Deadline: " (e.g., "Deadline: Pathway Choice")
+
+=== TIMEZONE HANDLING ===
+Extract timezone from context and map to standard format:
+- "(Paris time)", "(CET)", "(Central European)" → "Europe/Paris"
+- "(Berlin time)", "(German time)" → "Europe/Berlin"
+- "(London time)", "(GMT)", "(UK time)" → "Europe/London"
+- "(EST)", "(Eastern)", "(New York)" → "America/New_York"
+- "(PST)", "(Pacific)", "(LA time)" → "America/Los_Angeles"
+- If no timezone mentioned → "Europe/Berlin"
+
+=== DATE RULES ===
 - Today is {today_str} ({day_of_week})
 - "Tomorrow" = the day after {today_str}
 - "Next Monday" = the coming Monday after today
 - "This weekend" = the upcoming Saturday/Sunday
-- If only a day name is given (e.g., "Friday"), use the NEXT occurrence of that day
-- If only a month and day are given (e.g., "March 15"), use {current_year} unless that date has passed, then use {current_year + 1}
-- If no year is specified, assume {current_year}
+- Day name only (e.g., "Friday") = NEXT occurrence of that day
+- Month + day only (e.g., "March 15") = {current_year}, or {current_year + 1} if passed
+- No year specified = assume {current_year}
 
-OUTPUT FORMAT:
-- Use 24-hour time format (HH:MM)
-- Use YYYY-MM-DD format for dates
+=== OUTPUT FORMAT ===
+- Times in 24-hour format (HH:MM)
+- Dates in YYYY-MM-DD format
 - All dates must be absolute (no relative dates in output)
 
-Respond ONLY with a JSON object in this exact format:
+Respond ONLY with JSON:
 {{
     "found_event": true/false,
     "event_info": {{
-        "title": "Event Title",
+        "title": "Event Title or Deadline: Subject",
         "date": "YYYY-MM-DD",
         "start_time": "HH:MM" or null,
         "end_time": "HH:MM" or null,
         "location": "Location" or null,
-        "description": "Additional details" or null,
-        "timezone": "Europe/Berlin" or null,
+        "description": "Additional context" or null,
+        "timezone": "Europe/Berlin",
         "is_all_day": true/false,
         "confidence": 0.0-1.0
     }},
-    "raw_text": "Any relevant text found in the image"
+    "raw_text": "Relevant text from the image"
 }}
 
-If no event is found, set found_event to false and event_info to null.
+If nothing calendar-worthy is found, set found_event to false and event_info to null.
 
-Be thorough but accurate - only report events you're confident about."""
+Be thorough - if there's a date and time mentioned, it probably belongs on a calendar!"""
     
     def _parse_response(self, result: dict) -> OpenAIAnalysisResult:
         """Parse the OpenAI response into our schema."""
