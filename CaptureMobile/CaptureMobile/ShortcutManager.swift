@@ -22,9 +22,6 @@ final class ShortcutManager {
     /// 3. Paste the link here
     static let iCloudShortcutLink = "https://www.icloud.com/shortcuts/YOUR_SHORTCUT_ID_HERE"
     
-    /// Backend URL for the API
-    static let backendURL = "https://your-backend-url.com/analyze-screenshot"
-    
     // MARK: - Install Shortcut
     
     /// Opens the iCloud shortcut link to install the pre-made shortcut

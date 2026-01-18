@@ -92,30 +92,61 @@ class OpenAIService:
         day_of_week = now.strftime("%A")
         current_year = now.year
         
-        return f"""You are an expert at analyzing images and extracting event information.
+        return f"""You are an expert at analyzing images and extracting event information from ANY visual source - including messaging apps, emails, posters, invitations, and more.
 
 TODAY'S DATE: {today_str} ({day_of_week})
 CURRENT YEAR: {current_year}
 
 Your task is to look at screenshots and identify any calendar events, meetings, appointments, or scheduled activities.
 
-Look for:
-- Event titles/names
-- Dates (specific dates or relative like "tomorrow", "next Monday")
-- Times (start time, end time)
-- Locations (physical addresses, meeting rooms, virtual meeting links)
-- Additional details or descriptions
+=== MESSAGING APP CONTEXT ===
+When analyzing chat/messaging screenshots (WhatsApp, iMessage, Telegram, etc.):
+1. IDENTIFY THE CONTACT: Look for the contact name at the top of the chat or in the conversation header. This person should be included in the event title.
+2. INFER THE EVENT TYPE: "Let's grab coffee" → Coffee, "dinner?" → Dinner, "meet up" → Meeting
+3. BUILD A DESCRIPTIVE TITLE: Combine the activity with the person's name
+   - Example: Chat with "Sarah" about "coffee tomorrow" → Title: "Coffee with Sarah"
+   - Example: Chat with "Max" about "gym at 6" → Title: "Gym with Max"
+4. EXTRACT IMPLICIT DETAILS:
+   - "at yours" / "my place" → Location: "[Contact name]'s place" or "My place"
+   - "the usual spot" → Note this in description as "usual meeting spot"
+   - Emojis can indicate event type: 🍕=food, 🎬=movie, 🏋️=gym, ☕=coffee
 
-IMPORTANT DATE RULES:
+=== WHAT TO LOOK FOR ===
+- Event titles/names
+- Contact/person names (from chat headers, message senders, email recipients)
+- Dates (specific dates or relative like "tomorrow", "next Monday", "this Friday")
+- Times (start time, end time, or just "evening", "morning", "afternoon")
+- Locations (addresses, venue names, "at mine", "your place", links)
+- Activity types (dinner, coffee, meeting, call, workout, etc.)
+
+=== TIME INFERENCE ===
+When exact times aren't given, make reasonable inferences:
+- "morning" → 09:00
+- "lunch" → 12:00
+- "afternoon" → 14:00
+- "evening" / "tonight" → 19:00
+- "dinner" → 19:00
+- "coffee" / "breakfast" → 09:00
+- Just a number like "at 8" → Use context (breakfast=08:00, dinner=20:00)
+- If ambiguous, prefer the more likely time based on activity type
+
+=== DATE RULES ===
 - Today is {today_str} ({day_of_week})
 - "Tomorrow" = the day after {today_str}
 - "Next Monday" = the coming Monday after today
 - "This weekend" = the upcoming Saturday/Sunday
-- If only a day name is given (e.g., "Friday"), use the NEXT occurrence of that day
-- If only a month and day are given (e.g., "March 15"), use {current_year} unless that date has passed, then use {current_year + 1}
+- "Friday" without qualifier = the NEXT Friday from today
+- If only month/day given, use {current_year} unless passed, then {current_year + 1}
 - If no year is specified, assume {current_year}
 
-OUTPUT FORMAT:
+=== TITLE FORMATTING ===
+Create human-friendly, descriptive titles:
+- Include the OTHER person's name when it's a 1:1 meeting
+- Include the activity type
+- Good: "Dinner with Max", "Coffee with Sarah", "Call with Mom"
+- Bad: "Meeting", "Event", "Appointment"
+
+=== OUTPUT FORMAT ===
 - Use 24-hour time format (HH:MM)
 - Use YYYY-MM-DD format for dates
 - All dates must be absolute (no relative dates in output)
@@ -124,22 +155,23 @@ Respond ONLY with a JSON object in this exact format:
 {{
     "found_event": true/false,
     "event_info": {{
-        "title": "Event Title",
+        "title": "Activity with Person Name",
         "date": "YYYY-MM-DD",
         "start_time": "HH:MM" or null,
         "end_time": "HH:MM" or null,
         "location": "Location" or null,
-        "description": "Additional details" or null,
-        "timezone": "Europe/Berlin" or null,
+        "description": "Additional context from conversation" or null,
+        "timezone": "Europe/Berlin",
         "is_all_day": true/false,
-        "confidence": 0.0-1.0
+        "confidence": 0.0-1.0,
+        "attendee_name": "Name of other person" or null
     }},
-    "raw_text": "Any relevant text found in the image"
+    "raw_text": "Relevant text from the image"
 }}
 
 If no event is found, set found_event to false and event_info to null.
 
-Be thorough but accurate - only report events you're confident about."""
+Be thorough but accurate - extract the most useful calendar entry possible from the context."""
     
     def _parse_response(self, result: dict) -> OpenAIAnalysisResult:
         """Parse the OpenAI response into our schema."""
@@ -159,7 +191,8 @@ Be thorough but accurate - only report events you're confident about."""
                     description=event_info_data.get("description"),
                     timezone=event_info_data.get("timezone", "UTC"),
                     is_all_day=event_info_data.get("is_all_day", False),
-                    confidence=event_info_data.get("confidence", 0.5)
+                    confidence=event_info_data.get("confidence", 0.5),
+                    attendee_name=event_info_data.get("attendee_name")
                 )
             except Exception as e:
                 print(f"Failed to parse event info: {e}")

@@ -153,7 +153,7 @@ class GoogleCalendarService:
             }
         
         # Add a note that this was created by Capture
-        note = "\n\n---\nCreated by Capture - Screenshot to Calendar"
+        note = "\n\n---\nCreated by Capture"
         if event_body.get("description"):
             event_body["description"] += note
         else:

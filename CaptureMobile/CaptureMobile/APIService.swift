@@ -14,7 +14,7 @@ final class APIService {
     
     // MARK: - Configuration
     // TODO: Update with your actual backend URL
-    private let baseURL = "http://localhost:8000"
+    private let baseURL = "https://capturemobile-production.up.railway.app"
     
     // MARK: - Errors
     enum APIError: LocalizedError {
