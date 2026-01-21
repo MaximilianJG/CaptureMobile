@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		670EE1822F1BE0EC00E6D329 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 670EE1812F1BE0EC00E6D329 /* GoogleSignIn */; };
 		670EE1842F1BE0EC00E6D329 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 670EE1832F1BE0EC00E6D329 /* GoogleSignInSwift */; };
+		678489D52F20DFB000646787 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = 678489D42F20DFB000646787 /* PostHog */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -41,6 +42,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				678489D52F20DFB000646787 /* PostHog in Frameworks */,
 				670EE1822F1BE0EC00E6D329 /* GoogleSignIn in Frameworks */,
 				670EE1842F1BE0EC00E6D329 /* GoogleSignInSwift in Frameworks */,
 			);
@@ -87,6 +89,7 @@
 			packageProductDependencies = (
 				670EE1812F1BE0EC00E6D329 /* GoogleSignIn */,
 				670EE1832F1BE0EC00E6D329 /* GoogleSignInSwift */,
+				678489D42F20DFB000646787 /* PostHog */,
 			);
 			productName = CaptureMobile;
 			productReference = 670EE15C2F1BDA6B00E6D329 /* CaptureMobile.app */;
@@ -118,6 +121,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				670EE1802F1BE0EC00E6D329 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				678489D32F20DFB000646787 /* XCRemoteSwiftPackageReference "posthog-ios" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 670EE15D2F1BDA6B00E6D329 /* Products */;
@@ -369,6 +373,14 @@
 				minimumVersion = 9.1.0;
 			};
 		};
+		678489D32F20DFB000646787 /* XCRemoteSwiftPackageReference "posthog-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/PostHog/posthog-ios";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.37.2;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -381,6 +393,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 670EE1802F1BE0EC00E6D329 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignInSwift;
+		};
+		678489D42F20DFB000646787 /* PostHog */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 678489D32F20DFB000646787 /* XCRemoteSwiftPackageReference "posthog-ios" */;
+			productName = PostHog;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

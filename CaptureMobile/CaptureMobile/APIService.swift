@@ -7,6 +7,7 @@
 
 import Foundation
 import UIKit
+import PostHog
 
 final class APIService {
     static let shared = APIService()
@@ -84,8 +85,14 @@ final class APIService {
     /// - Parameter image: The screenshot image to analyze
     /// - Returns: The analysis response with event details
     func analyzeScreenshot(_ image: UIImage) async throws -> AnalyzeResponse {
+        // Track screenshot sent
+        PostHogSDK.shared.capture("screenshot_sent")
+        
         // Get access token
         guard let accessToken = await GoogleAuthManager.shared.getAccessToken() else {
+            PostHogSDK.shared.capture("event_created_failed", properties: [
+                "error": "no_access_token"
+            ])
             throw APIError.noAccessToken
         }
         
@@ -127,7 +134,21 @@ final class APIService {
         // Decode response
         let decoder = JSONDecoder()
         guard let analyzeResponse = try? decoder.decode(AnalyzeResponse.self, from: data) else {
+            PostHogSDK.shared.capture("event_created_failed", properties: [
+                "error": "decoding_failed"
+            ])
             throw APIError.decodingFailed
+        }
+        
+        // Track success or failure
+        if analyzeResponse.success, let event = analyzeResponse.eventCreated {
+            PostHogSDK.shared.capture("event_created_success", properties: [
+                "event_title": event.title
+            ])
+        } else {
+            PostHogSDK.shared.capture("event_created_failed", properties: [
+                "error": analyzeResponse.message
+            ])
         }
         
         return analyzeResponse

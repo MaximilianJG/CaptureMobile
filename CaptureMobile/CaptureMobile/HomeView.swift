@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import PostHog
 
 struct HomeView: View {
     @ObservedObject var authManager = GoogleAuthManager.shared
@@ -102,6 +103,7 @@ struct HomeView: View {
             
             // Manage button - white with border
             Button("Manage") {
+                PostHogSDK.shared.capture("manage_account_opened")
                 showManageSheet = true
             }
             .font(.system(size: 14, weight: .medium))
@@ -121,6 +123,9 @@ struct HomeView: View {
     // MARK: - Setup Shortcut Card
     private var setupShortcutCard: some View {
         Button(action: {
+            // Track shortcut install tap
+            PostHogSDK.shared.capture("shortcut_install_tapped")
+            
             // Directly open Shortcuts app - no popup
             ShortcutManager.shared.installShortcut()
             shortcutCreated = true
@@ -190,6 +195,7 @@ struct HomeView: View {
     private var reAddShortcutLink: some View {
         HStack(spacing: 16) {
             Button(action: {
+                PostHogSDK.shared.capture("shortcut_readd_tapped")
                 ShortcutManager.shared.installShortcut()
                 shortcutCreated = true
             }) {
@@ -207,6 +213,7 @@ struct HomeView: View {
                 .foregroundStyle(.quaternary)
             
             Button(action: {
+                PostHogSDK.shared.capture("feedback_tapped")
                 if let url = URL(string: "https://maximilianglasmacher.notion.site/2d037e9160b7805faf48c8daed29daa7?pvs=105") {
                     UIApplication.shared.open(url)
                 }

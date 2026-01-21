@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 import Combine
 import GoogleSignIn
+import PostHog
 
 class GoogleAuthManager: ObservableObject {
     static let shared = GoogleAuthManager()
@@ -60,6 +61,9 @@ class GoogleAuthManager: ObservableObject {
         isLoading = true
         errorMessage = nil
         
+        // Track sign in started
+        PostHogSDK.shared.capture("sign_in_started")
+        
         do {
             let result = try await GIDSignIn.sharedInstance.signIn(
                 withPresenting: rootViewController,
@@ -67,16 +71,25 @@ class GoogleAuthManager: ObservableObject {
                 additionalScopes: [calendarScope]
             )
             
-            handleSignInResult(result.user)
+            handleSignInResult(result.user, isExplicitSignIn: true)
         } catch {
             errorMessage = error.localizedDescription
             isLoading = false
+            
+            // Track sign in failed
+            PostHogSDK.shared.capture("sign_in_failed", properties: [
+                "error": error.localizedDescription
+            ])
         }
     }
     
     // MARK: - Sign Out
     @MainActor
     func signOut() {
+        // Track sign out
+        PostHogSDK.shared.capture("sign_out")
+        PostHogSDK.shared.reset()
+        
         GIDSignIn.sharedInstance.signOut()
         keychain.clearAll()
         isSignedIn = false
@@ -128,7 +141,7 @@ class GoogleAuthManager: ObservableObject {
     
     // MARK: - Handle Sign In Result
     @MainActor
-    private func handleSignInResult(_ user: GIDGoogleUser) {
+    private func handleSignInResult(_ user: GIDGoogleUser, isExplicitSignIn: Bool = false) {
         guard let email = user.profile?.email,
               let name = user.profile?.name else {
             errorMessage = "Failed to get user profile"
@@ -155,6 +168,17 @@ class GoogleAuthManager: ObservableObject {
         
         isSignedIn = true
         isLoading = false
+        
+        // Always identify user (links events to this user for the session)
+        PostHogSDK.shared.identify(email, userProperties: [
+            "name": name,
+            "auth_provider": "google"
+        ])
+        
+        // Only track sign_in_completed for explicit sign-ins, not session restoration
+        if isExplicitSignIn {
+            PostHogSDK.shared.capture("sign_in_completed")
+        }
     }
     
     // MARK: - Handle URL
