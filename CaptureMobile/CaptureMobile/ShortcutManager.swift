@@ -20,7 +20,8 @@ final class ShortcutManager {
     /// 1. Create a shortcut with: "Take Screenshot" → "Send to Capture"
     /// 2. Tap the shortcut name → Share → "Copy iCloud Link"
     /// 3. Paste the link here
-    static let iCloudShortcutLink = "https://www.icloud.com/shortcuts/80663858d9b24fa3932876527c7d4f91"
+    static let iCloudShortcutLink = "https://www.icloud.com/shortcuts/2c40492c65114c98a9cbf6770c5ac3f4"
+    
     
     // MARK: - Install Shortcut
     
@@ -43,3 +44,4 @@ final class ShortcutManager {
         }
     }
 }
+

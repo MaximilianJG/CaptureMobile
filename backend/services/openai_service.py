@@ -53,7 +53,7 @@ class OpenAIService:
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Analyze this screenshot and extract any event information. If you find an event, extract all available details. Respond with the JSON format specified."
+                                "text": "Analyze this screenshot thoroughly. Examine the ENTIRE image for context - who is involved (sender names, profiles), what the event is about (subject, purpose), and any relevant details. Extract event information and include meaningful context in the title and description. Respond with the JSON format specified."
                             },
                             {
                                 "type": "image_url",
@@ -113,6 +113,23 @@ Your task is to look at screenshots and identify anything that should go on a ca
 - Location if mentioned
 - Additional context
 
+=== CONTEXT DISCOVERY ===
+Examine the ENTIRE screenshot to gather context, not just the event details:
+
+LOOK FOR:
+- WHO: Names, profile pictures, email addresses, usernames, sender info
+- WHAT: Subject lines, message content, event purpose, meeting agenda
+- WHERE: App name (Messages, WhatsApp, Email, etc.), website, platform
+- WHY: Any indication of the meeting's purpose or topic
+
+CONTEXTUAL CLUES:
+- Message sender name → likely the other attendee
+- Email "From:" field → who scheduled/invited
+- Chat conversation → may reveal meeting purpose
+- Profile names in scheduling apps → attendee names
+- Subject lines → meeting topic for title
+- Thread context → why the meeting is happening
+
 === DEADLINE HANDLING ===
 Deadlines ARE events! They belong on a calendar.
 - "Platform closes at 2pm" → start_time: "14:00"
@@ -138,6 +155,28 @@ Extract timezone from context and map to standard format:
 - Month + day only (e.g., "March 15") = {current_year}, or {current_year + 1} if passed
 - No year specified = assume {current_year}
 
+=== CONTEXT REASONING ===
+After gathering context, reason about what to include:
+
+1. TITLE: Should be descriptive and meaningful. Include:
+   - The purpose/topic if clear (e.g., "Coffee with Sarah" not just "Meeting")
+   - The person's name if it's a 1:1 (e.g., "Call with John")
+   - Context that makes the event recognizable at a glance
+
+2. DESCRIPTION: Include relevant context like:
+   - Who suggested/organized it
+   - Brief purpose if mentioned
+   - Any preparation needed
+   - Source app (e.g., "Via WhatsApp message")
+
+3. ATTENDEE: Extract the other person's name if identifiable from:
+   - Sender name, profile name, email address, or mention in text
+
+DO NOT include:
+- Irrelevant UI elements
+- Unrelated messages in the screenshot
+- Personal information beyond what's needed for the event
+
 === OUTPUT FORMAT ===
 - Times in 24-hour format (HH:MM)
 - Dates in YYYY-MM-DD format
@@ -147,15 +186,16 @@ Respond ONLY with JSON:
 {{
     "found_event": true/false,
     "event_info": {{
-        "title": "Event Title or Deadline: Subject",
+        "title": "Descriptive Event Title (include person/purpose)",
         "date": "YYYY-MM-DD",
         "start_time": "HH:MM" or null,
         "end_time": "HH:MM" or null,
         "location": "Location" or null,
-        "description": "Additional context" or null,
+        "description": "Relevant context: who organized, purpose, source app" or null,
         "timezone": "Europe/Berlin",
         "is_all_day": true/false,
-        "confidence": 0.0-1.0
+        "confidence": 0.0-1.0,
+        "attendee_name": "Name of the other person involved" or null
     }},
     "raw_text": "Relevant text from the image"
 }}
