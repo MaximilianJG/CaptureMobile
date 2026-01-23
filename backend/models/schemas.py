@@ -59,6 +59,7 @@ class ExtractedEventInfo(BaseModel):
     description: Optional[str] = Field(None, description="Additional details or notes")
     timezone: Optional[str] = Field("Europe/Berlin", description="Timezone if mentioned")
     is_all_day: bool = Field(False, description="Whether this is an all-day event")
+    is_deadline: bool = Field(False, description="Whether this is a deadline event")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0, description="Confidence score 0-1")
     attendee_name: Optional[str] = Field(None, description="Name of the other person involved")
 

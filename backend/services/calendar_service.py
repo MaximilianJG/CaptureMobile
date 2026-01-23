@@ -115,8 +115,36 @@ class GoogleCalendarService:
         # Handle date/time
         timezone = event_info.timezone or "UTC"
         
-        if event_info.is_all_day:
-            # All-day event
+        # Special handling for deadline events
+        if event_info.is_deadline:
+            # Deadlines are always all-day events
+            event_body["start"] = {
+                "date": event_info.date,
+                "timeZone": timezone,
+            }
+            event_body["end"] = {
+                "date": event_info.date,
+                "timeZone": timezone,
+            }
+            
+            # Add deadline time to description if available
+            if event_info.start_time:
+                deadline_time_str = self._format_time_24h(event_info.start_time)
+                deadline_note = f"⏰ Deadline: {deadline_time_str}"
+                if event_body.get("description"):
+                    event_body["description"] = f"{deadline_note}\n\n{event_body['description']}"
+                else:
+                    event_body["description"] = deadline_note
+            
+            # Add reminder 1 day before for deadline events
+            event_body["reminders"] = {
+                "useDefault": False,
+                "overrides": [
+                    {"method": "popup", "minutes": 1440}  # 1 day = 1440 minutes
+                ]
+            }
+        elif event_info.is_all_day:
+            # Regular all-day event
             event_body["start"] = {
                 "date": event_info.date,
                 "timeZone": timezone,
@@ -202,6 +230,22 @@ class GoogleCalendarService:
         except:
             # If parsing fails, just return the original with hour incremented
             return datetime_str
+    
+    def _format_time_24h(self, time_str: str) -> str:
+        """
+        Format time in 24-hour format for display.
+        
+        Args:
+            time_str: Time in HH:MM format (24h)
+            
+        Returns:
+            Time in 24-hour format (e.g., "23:59")
+        """
+        try:
+            hour, minute = map(int, time_str.split(":"))
+            return f"{hour:02d}:{minute:02d}"
+        except:
+            return time_str
     
     async def list_calendars(self, access_token: str) -> list:
         """

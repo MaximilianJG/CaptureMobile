@@ -131,11 +131,16 @@ CONTEXTUAL CLUES:
 - Thread context → why the meeting is happening
 
 === DEADLINE HANDLING ===
-Deadlines ARE events! They belong on a calendar.
-- "Platform closes at 2pm" → start_time: "14:00"
-- "Due by 5pm" → start_time: "17:00"
-- "Submit before midnight" → start_time: "23:59"
-- For deadlines, prefix the title with "Deadline: " (e.g., "Deadline: Pathway Choice")
+Deadlines ARE events! They belong on a calendar. Mark them with is_deadline: true.
+- Set is_deadline: true for any deadline, due date, or submission cutoff
+- STILL extract the time even for deadlines (e.g., "Due by 5pm" → start_time: "17:00")
+- Prefix the title with "Deadline: " (e.g., "Deadline: Project Submission")
+
+Examples:
+- "Platform closes at 2pm" → is_deadline: true, start_time: "14:00"
+- "Due by 5pm" → is_deadline: true, start_time: "17:00"
+- "Submit before midnight" → is_deadline: true, start_time: "23:59"
+- "Assignment due Friday" (no time) → is_deadline: true, start_time: null
 
 === TIMEZONE HANDLING ===
 Extract timezone from context and map to standard format:
@@ -194,6 +199,7 @@ Respond ONLY with JSON:
         "description": "Relevant context: who organized, purpose, source app" or null,
         "timezone": "Europe/Berlin",
         "is_all_day": true/false,
+        "is_deadline": true/false,
         "confidence": 0.0-1.0,
         "attendee_name": "Name of the other person involved" or null
     }},
@@ -241,6 +247,7 @@ Be thorough - if there's a date and time mentioned, it probably belongs on a cal
                     description=event_info_data.get("description"),
                     timezone=event_info_data.get("timezone", "Europe/Berlin"),
                     is_all_day=is_all_day,
+                    is_deadline=event_info_data.get("is_deadline", False),
                     confidence=event_info_data.get("confidence", 0.5),
                     attendee_name=event_info_data.get("attendee_name"),
                 )
