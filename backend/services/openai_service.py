@@ -177,6 +177,15 @@ Extract timezone from context and map to standard format:
 - Month + day only (e.g., "March 15") = {current_year}, or {current_year + 1} if passed
 - No year specified = assume {current_year}
 
+DATE FORMAT INTERPRETATION (IMPORTANT):
+- Default to EUROPEAN format: DD-MM-YYYY or DD/MM/YYYY (day first, then month)
+- "07-03-2026" or "07/03/2026" = March 7th, 2026 (NOT July 3rd)
+- "15-01-2026" or "15/01/2026" = January 15th, 2026
+- Only use US format (MM-DD-YYYY) if the context is clearly American (US locations, US websites)
+- When the day number is > 12, it's unambiguous (e.g., "25-12-2026" = December 25th)
+- European locations (Paris, Berlin, London, etc.) = use European date format
+- If unsure, assume European format since default timezone is Europe/Berlin
+
 === CONTEXT REASONING ===
 After gathering context, reason about what to include:
 
