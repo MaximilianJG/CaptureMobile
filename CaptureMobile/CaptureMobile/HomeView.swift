@@ -130,28 +130,52 @@ struct HomeView: View {
             ShortcutManager.shared.installShortcut()
             shortcutCreated = true
         }) {
-            HStack(spacing: 14) {
-                Image(systemName: "apps.iphone")
-                    .font(.system(size: 24))
-                    .foregroundStyle(.primary)
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Setup iOS Shortcut")
-                        .font(.system(size: 16, weight: .semibold))
-                    Text("Tap to configure")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
+            VStack(spacing: 12) {
+                // Icon with badge
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.2))
+                        .frame(width: 56, height: 56)
+                    
+                    Image(systemName: "arrow.down.app.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.white)
                 }
                 
-                Spacer()
+                // Text
+                VStack(spacing: 4) {
+                    Text("Setup iOS Shortcut")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.white)
+                    
+                    Text("Required to capture screenshots")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
                 
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                // CTA
+                HStack(spacing: 6) {
+                    Text("Tap to install")
+                        .font(.system(size: 14, weight: .semibold))
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(.black)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(Color.white, in: Capsule())
             }
-            .padding(16)
-            .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08), lineWidth: 1))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
+            .padding(.horizontal, 20)
+            .background(
+                LinearGradient(
+                    colors: [Color.black, Color.black.opacity(0.85)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                in: RoundedRectangle(cornerRadius: 20)
+            )
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 20)

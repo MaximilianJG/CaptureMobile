@@ -92,13 +92,17 @@ class GoogleAuthManager: ObservableObject {
         
         GIDSignIn.sharedInstance.signOut()
         keychain.clearAll()
+        
+        // Reset shortcut setup flag so it shows again for next user
+        UserDefaults.standard.removeObject(forKey: "shortcutCreated")
+        
         isSignedIn = false
         currentUser = nil
     }
     
     // MARK: - Get Access Token
     func getAccessToken() async -> String? {
-        // First try to get from current Google session
+        // First try to get from current Google session (works in main app)
         if let user = GIDSignIn.sharedInstance.currentUser {
             do {
                 try await user.refreshTokensIfNeeded()
@@ -106,12 +110,73 @@ class GoogleAuthManager: ObservableObject {
                 _ = keychain.save(token, forKey: .accessToken)
                 return token
             } catch {
-                print("Failed to refresh token: \(error)")
+                print("Failed to refresh token via SDK: \(error)")
             }
         }
         
-        // Fall back to stored token
+        // Extension context: SDK session not available, refresh manually using refresh token
+        if let refreshToken = keychain.readString(forKey: .refreshToken) {
+            if let newAccessToken = await refreshAccessTokenManually(refreshToken: refreshToken) {
+                _ = keychain.save(newAccessToken, forKey: .accessToken)
+                return newAccessToken
+            }
+        }
+        
+        // Last resort: return stored token (may be expired)
         return keychain.readString(forKey: .accessToken)
+    }
+    
+    // MARK: - Manual Token Refresh
+    /// Refreshes the access token using the refresh token directly via HTTP.
+    /// This is needed when running in extension context where GIDSignIn session isn't available.
+    private func refreshAccessTokenManually(refreshToken: String) async -> String? {
+        // Get client ID from Info.plist
+        guard let clientID = Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String else {
+            print("Failed to get GIDClientID from Info.plist")
+            return nil
+        }
+        
+        let tokenURL = URL(string: "https://oauth2.googleapis.com/token")!
+        
+        var request = URLRequest(url: tokenURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let bodyParams = [
+            "client_id": clientID,
+            "refresh_token": refreshToken,
+            "grant_type": "refresh_token"
+        ]
+        
+        let bodyString = bodyParams
+            .map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)" }
+            .joined(separator: "&")
+        
+        request.httpBody = bodyString.data(using: .utf8)
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("Invalid response type")
+                return nil
+            }
+            
+            if httpResponse.statusCode == 200 {
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let accessToken = json["access_token"] as? String {
+                    print("✅ Successfully refreshed access token manually")
+                    return accessToken
+                }
+            } else {
+                let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
+                print("Token refresh failed (\(httpResponse.statusCode)): \(errorBody)")
+            }
+        } catch {
+            print("Token refresh request failed: \(error)")
+        }
+        
+        return nil
     }
     
     // MARK: - Restore Previous Sign In
