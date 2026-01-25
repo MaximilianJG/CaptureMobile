@@ -9,6 +9,7 @@ import SwiftUI
 import GoogleSignIn
 import AppIntents
 import PostHog
+import UserNotifications
 
 @main
 struct CaptureMobileApp: App {
@@ -21,6 +22,9 @@ struct CaptureMobileApp: App {
             host: "https://eu.i.posthog.com"
         )
         PostHogSDK.shared.setup(config)
+        
+        // Request notification permission for capture results
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         
         if #available(iOS 16.0, *) {
             // This makes the "Send to Capture" action available in Shortcuts

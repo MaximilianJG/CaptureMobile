@@ -162,8 +162,17 @@ class GoogleCalendarService:
             )
             
             if event_info.end_time:
+                # Check if this is an overnight event (end time before start time)
+                end_date = event_info.date
+                if event_info.start_time and event_info.end_time:
+                    start_hour = int(event_info.start_time.split(":")[0])
+                    end_hour = int(event_info.end_time.split(":")[0])
+                    if end_hour < start_hour:
+                        # Overnight event - end date is next day
+                        end_date = self._add_days_to_date(event_info.date, 1)
+                
                 end_datetime = self._build_datetime(
-                    event_info.date,
+                    end_date,
                     event_info.end_time,
                     timezone
                 )
@@ -230,6 +239,24 @@ class GoogleCalendarService:
         except:
             # If parsing fails, just return the original with hour incremented
             return datetime_str
+    
+    def _add_days_to_date(self, date_str: str, days: int) -> str:
+        """
+        Add days to a date string.
+        
+        Args:
+            date_str: Date in YYYY-MM-DD format
+            days: Number of days to add
+            
+        Returns:
+            New date string in YYYY-MM-DD format
+        """
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            dt += timedelta(days=days)
+            return dt.strftime("%Y-%m-%d")
+        except:
+            return date_str
     
     def _format_time_24h(self, time_str: str) -> str:
         """

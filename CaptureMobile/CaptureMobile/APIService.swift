@@ -100,12 +100,18 @@ final class APIService {
         
         // Encode image to base64
         guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+            PostHogSDK.shared.capture("event_created_failed", properties: [
+                "error": "encoding_failed"
+            ])
             throw APIError.encodingFailed
         }
         let base64Image = imageData.base64EncodedString()
         
         // Build request
         guard let url = URL(string: "\(baseURL)/analyze-screenshot") else {
+            PostHogSDK.shared.capture("event_created_failed", properties: [
+                "error": "invalid_url"
+            ])
             throw APIError.invalidURL
         }
         
@@ -121,15 +127,32 @@ final class APIService {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
         // Send request
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            PostHogSDK.shared.capture("event_created_failed", properties: [
+                "error": "network_error",
+                "details": error.localizedDescription
+            ])
+            throw APIError.networkError(error)
+        }
         
         // Check response
         guard let httpResponse = response as? HTTPURLResponse else {
+            PostHogSDK.shared.capture("event_created_failed", properties: [
+                "error": "bad_response"
+            ])
             throw APIError.networkError(URLError(.badServerResponse))
         }
         
         if httpResponse.statusCode != 200 {
             let errorMessage = String(data: data, encoding: .utf8)
+            PostHogSDK.shared.capture("event_created_failed", properties: [
+                "error": "server_error",
+                "status_code": httpResponse.statusCode
+            ])
             throw APIError.serverError(httpResponse.statusCode, errorMessage)
         }
         

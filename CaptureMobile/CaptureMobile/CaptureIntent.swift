@@ -10,6 +10,7 @@ import UIKit
 import SwiftUI
 import UniformTypeIdentifiers
 import PostHog
+import UserNotifications
 
 /// App Intent that allows Shortcuts to send images directly to Capture
 /// This appears as "Send to Capture" in the Shortcuts app
@@ -76,6 +77,12 @@ struct CaptureScreenshotIntent: AppIntent {
                 // Save to capture history
                 CaptureHistoryManager.shared.addCapture(event)
                 
+                // Send success notification
+                sendNotification(
+                    title: "Event Created",
+                    body: "\(event.title)\n\(formatEventTime(event))"
+                )
+                
                 PostHogSDK.shared.capture("shortcut_completed", properties: [
                     "success": true,
                     "event_title": event.title
@@ -83,6 +90,22 @@ struct CaptureScreenshotIntent: AppIntent {
                 PostHogSDK.shared.flush()
                 return .result(value: "✅ Created: \(event.title)")
             } else {
+                // Check if it's "no event found" or "calendar creation failed"
+                let isNoEventFound = response.message.lowercased().contains("no event") || 
+                                     response.message.lowercased().contains("not found")
+                
+                if isNoEventFound {
+                    sendNotification(
+                        title: "No Event Found",
+                        body: "Couldn't detect an event in your screenshot"
+                    )
+                } else {
+                    sendNotification(
+                        title: "Event Creation Failed",
+                        body: response.message
+                    )
+                }
+                
                 PostHogSDK.shared.capture("shortcut_completed", properties: [
                     "success": false,
                     "error": response.message
@@ -91,6 +114,12 @@ struct CaptureScreenshotIntent: AppIntent {
                 return .result(value: "⚠️ \(response.message)")
             }
         } catch {
+            // Send error notification
+            sendNotification(
+                title: "Capture Failed",
+                body: error.localizedDescription
+            )
+            
             PostHogSDK.shared.capture("shortcut_completed", properties: [
                 "success": false,
                 "error": error.localizedDescription
@@ -102,6 +131,61 @@ struct CaptureScreenshotIntent: AppIntent {
     
     // Open the app when there's an error (optional)
     static var openAppWhenRun: Bool = false
+    
+    // MARK: - Notification Helpers
+    
+    private func sendNotification(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil  // nil = send immediately
+        )
+        UNUserNotificationCenter.current().add(request)
+    }
+    
+    private func formatEventTime(_ event: APIService.EventDetails) -> String {
+        // Parse the ISO date string
+        let dateTimeFormatter = DateFormatter()
+        dateTimeFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        
+        let dateOnlyFormatter = DateFormatter()
+        dateOnlyFormatter.dateFormat = "yyyy-MM-dd"
+        
+        var date: Date?
+        
+        // Try date with time first
+        date = dateTimeFormatter.date(from: event.startTime)
+        
+        // Try date only
+        if date == nil {
+            date = dateOnlyFormatter.date(from: event.startTime)
+        }
+        
+        guard let parsedDate = date else {
+            return event.startTime
+        }
+        
+        // Format for display
+        let displayFormatter = DateFormatter()
+        let calendar = Calendar.current
+        
+        if calendar.isDateInToday(parsedDate) {
+            displayFormatter.dateFormat = "'Today,' HH:mm"
+        } else if calendar.isDateInTomorrow(parsedDate) {
+            displayFormatter.dateFormat = "'Tomorrow,' HH:mm"
+        } else if calendar.isDate(parsedDate, equalTo: Date(), toGranularity: .weekOfYear) {
+            displayFormatter.dateFormat = "EEEE, HH:mm"
+        } else {
+            displayFormatter.dateFormat = "MMM d, HH:mm"
+        }
+        
+        return displayFormatter.string(from: parsedDate)
+    }
 }
 
 /// Shortcuts App Provider - registers all intents with the system
