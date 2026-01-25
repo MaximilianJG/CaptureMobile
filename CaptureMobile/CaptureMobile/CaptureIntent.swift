@@ -73,6 +73,9 @@ struct CaptureScreenshotIntent: AppIntent {
             let response = try await APIService.shared.analyzeScreenshot(image)
             
             if response.success, let event = response.eventCreated {
+                // Save to capture history
+                CaptureHistoryManager.shared.addCapture(event)
+                
                 PostHogSDK.shared.capture("shortcut_completed", properties: [
                     "success": true,
                     "event_title": event.title

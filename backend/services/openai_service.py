@@ -121,6 +121,7 @@ LOOK FOR:
 - WHAT: Subject lines, message content, event purpose, meeting agenda
 - WHERE: App name (Messages, WhatsApp, Email, etc.), website, platform
 - WHY: Any indication of the meeting's purpose or topic
+- SOURCE APP: Identify the app from UI elements, colors, layout, icons
 
 CONTEXTUAL CLUES:
 - Message sender name → likely the other attendee
@@ -129,6 +130,22 @@ CONTEXTUAL CLUES:
 - Profile names in scheduling apps → attendee names
 - Subject lines → meeting topic for title
 - Thread context → why the meeting is happening
+
+SOURCE APP DETECTION (set source_app field):
+- Green chat bubbles, green header → "WhatsApp"
+- Blue chat bubbles (iMessage style) → "iMessage"
+- Instagram DM interface → "Instagram"
+- Gmail/Google Mail interface → "Gmail"
+- Outlook interface → "Outlook"
+- LinkedIn messages → "LinkedIn"
+- Slack interface → "Slack"
+- Teams interface → "Microsoft Teams"
+- Calendar app → "Calendar"
+- Notes app → "Notes"
+- Twitter/X DMs → "Twitter"
+- Facebook Messenger → "Messenger"
+- Telegram interface → "Telegram"
+- If unclear or unknown → null
 
 === DEADLINE HANDLING ===
 Deadlines ARE events! They belong on a calendar. Mark them with is_deadline: true.
@@ -201,7 +218,8 @@ Respond ONLY with JSON:
         "is_all_day": true/false,
         "is_deadline": true/false,
         "confidence": 0.0-1.0,
-        "attendee_name": "Name of the other person involved" or null
+        "attendee_name": "Name of the other person involved" or null,
+        "source_app": "WhatsApp/Instagram/Gmail/etc" or null
     }},
     "raw_text": "Relevant text from the image"
 }}
@@ -250,6 +268,7 @@ Be thorough - if there's a date and time mentioned, it probably belongs on a cal
                     is_deadline=event_info_data.get("is_deadline", False),
                     confidence=event_info_data.get("confidence", 0.5),
                     attendee_name=event_info_data.get("attendee_name"),
+                    source_app=event_info_data.get("source_app"),
                 )
             except Exception as e:
                 print(f"Failed to parse event info: {e}")

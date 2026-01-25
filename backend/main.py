@@ -123,7 +123,7 @@ async def analyze_screenshot(request: AnalyzeScreenshotRequest):
         
         if not analysis_result.found_event:
             print(f"[{timestamp}] ⚠️  NO EVENT FOUND in screenshot")
-            print(f"[{timestamp}] 📝 Raw text: {analysis_result.raw_text[:100] if analysis_result.raw_text else 'None'}...")
+            print(f"[{timestamp}] 📝 Raw text: {analysis_result.raw_text[:200] if analysis_result.raw_text else 'None'}...")
             print(f"{'='*50}\n")
             return AnalyzeScreenshotResponse(
                 success=False,
@@ -132,13 +132,17 @@ async def analyze_screenshot(request: AnalyzeScreenshotRequest):
             )
         
         event_info = analysis_result.event_info
+        source_app = getattr(event_info, 'source_app', None)
         print(f"[{timestamp}] ✅ EVENT DETECTED:")
         print(f"    📌 Title: {event_info.title or 'Untitled'}")
         print(f"    📅 Date: {event_info.date or 'Unknown'}")
         print(f"    🕐 Time: {event_info.start_time or 'All day'} - {event_info.end_time or 'N/A'}")
         print(f"    📍 Location: {event_info.location or 'None'}")
         print(f"    👤 Attendee: {getattr(event_info, 'attendee_name', None) or 'None'}")
+        print(f"    📱 SOURCE APP: {source_app or 'NOT DETECTED'}")
         print(f"    🎯 Confidence: {(event_info.confidence or 0.5):.0%}")
+        if analysis_result.raw_text:
+            print(f"    📝 Raw text: {analysis_result.raw_text[:150]}...")
         
         # Step 3: Create calendar event
         print(f"[{timestamp}] 📅 Creating calendar event...")
@@ -174,7 +178,8 @@ async def analyze_screenshot(request: AnalyzeScreenshotRequest):
             end_time=end_time_str,
             location=event_info.location,
             description=event_info.description,
-            calendar_link=created_event.get("htmlLink")
+            calendar_link=created_event.get("htmlLink"),
+            source_app=event_info.source_app
         )
         
         print(f"[{timestamp}] ✅ SUCCESS: Event created!")

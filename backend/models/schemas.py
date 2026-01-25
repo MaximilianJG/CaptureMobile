@@ -30,6 +30,7 @@ class EventDetails(BaseModel):
     location: Optional[str] = Field(None, description="Event location")
     description: Optional[str] = Field(None, description="Event description")
     calendar_link: Optional[str] = Field(None, description="Link to the event in Google Calendar")
+    source_app: Optional[str] = Field(None, description="Source app the screenshot was taken from")
 
 
 class AnalyzeScreenshotResponse(BaseModel):
@@ -62,6 +63,7 @@ class ExtractedEventInfo(BaseModel):
     is_deadline: bool = Field(False, description="Whether this is a deadline event")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0, description="Confidence score 0-1")
     attendee_name: Optional[str] = Field(None, description="Name of the other person involved")
+    source_app: Optional[str] = Field(None, description="Source app detected from screenshot (e.g., WhatsApp, Instagram)")
 
 
 class OpenAIAnalysisResult(BaseModel):

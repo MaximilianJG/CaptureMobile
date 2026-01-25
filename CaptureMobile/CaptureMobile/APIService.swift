@@ -68,6 +68,7 @@ final class APIService {
         let location: String?
         let description: String?
         let calendarLink: String?
+        let sourceApp: String?
         
         enum CodingKeys: String, CodingKey {
             case id
@@ -77,6 +78,7 @@ final class APIService {
             case location
             case description
             case calendarLink = "calendar_link"
+            case sourceApp = "source_app"
         }
     }
     
@@ -184,7 +186,8 @@ extension APIService {
                 endTime: "2026-01-20T11:00:00",
                 location: "Conference Room A",
                 description: "Weekly team sync",
-                calendarLink: "https://calendar.google.com/event?eid=mock123"
+                calendarLink: "https://calendar.google.com/event?eid=mock123",
+                sourceApp: "WhatsApp"
             ),
             message: "Event created successfully!"
         )

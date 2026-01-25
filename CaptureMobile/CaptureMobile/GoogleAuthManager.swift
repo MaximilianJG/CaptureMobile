@@ -96,6 +96,9 @@ class GoogleAuthManager: ObservableObject {
         // Reset shortcut setup flag so it shows again for next user
         UserDefaults.standard.removeObject(forKey: "shortcutCreated")
         
+        // Clear capture history
+        CaptureHistoryManager.shared.clearHistory()
+        
         isSignedIn = false
         currentUser = nil
     }
