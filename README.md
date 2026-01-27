@@ -97,17 +97,60 @@ For production, deploy to a server with HTTPS.
 |----------|-------------|
 | `OPENAI_API_KEY` | Your OpenAI API key (needs GPT-4 Vision access) |
 | `GOOGLE_CLIENT_ID` | Google OAuth Client ID for token validation |
+| `API_SECRET_KEY` | Secret key for API authentication (see Security section) |
 | `HOST` | Server host (default: 0.0.0.0) |
 | `PORT` | Server port (default: 8000) |
 | `DEBUG` | Enable debug mode (default: false) |
 
+## Security
+
+The backend includes several security measures to prevent API abuse:
+
+### Rate Limiting
+
+| Layer | Limit | Purpose |
+|-------|-------|---------|
+| Global burst | 100 req/min | Prevent DDoS |
+| Global daily cap | 500 req/day | Hard cost ceiling |
+| Per-user | 25 req/day | Prevent single-user abuse |
+
+Limits are configured in `main.py` and can be adjusted:
+```python
+RATE_LIMIT_PER_MINUTE = 100
+GLOBAL_DAILY_LIMIT = 500
+PER_USER_DAILY_LIMIT = 25
+```
+
+### API Key Authentication
+
+All requests must include the `X-API-Key` header:
+
+1. Generate a secure key (32+ characters):
+   ```bash
+   openssl rand -hex 32
+   ```
+
+2. Set `API_SECRET_KEY` in your Railway/server environment
+
+3. Update `apiKey` in `APIService.swift` to match
+
+### Image Size Validation
+
+Images larger than 10MB are rejected to prevent abuse and excessive OpenAI costs.
+
 ## API Endpoints
 
 ### `GET /health`
-Health check endpoint.
+Health check endpoint (no authentication required).
 
 ### `POST /analyze-screenshot`
 Analyze a screenshot and create a calendar event.
+
+**Headers:**
+```
+X-API-Key: your_api_secret_key
+Content-Type: application/json
+```
 
 **Request Body:**
 ```json
@@ -131,6 +174,31 @@ Analyze a screenshot and create a calendar event.
     "calendar_link": "https://calendar.google.com/..."
   },
   "message": "Event 'Team Meeting' created successfully!"
+}
+```
+
+**Error Responses:**
+- `401` - Invalid or missing API key / Google token
+- `413` - Image too large (>10MB)
+- `429` - Rate limit exceeded
+
+### `GET /stats`
+Get current usage statistics (requires API key).
+
+**Response:**
+```json
+{
+  "date": "2026-01-27",
+  "usage": {
+    "global_used": 42,
+    "global_limit": 500,
+    "active_users": 5
+  },
+  "limits": {
+    "per_minute": 100,
+    "global_daily": 500,
+    "per_user_daily": 25
+  }
 }
 ```
 

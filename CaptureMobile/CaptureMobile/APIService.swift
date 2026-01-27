@@ -14,8 +14,11 @@ final class APIService {
     private init() {}
     
     // MARK: - Configuration
-    // TODO: Update with your actual backend URL
     private let baseURL = "https://capturemobile-production.up.railway.app"
+    
+    // API Key for backend authentication
+    // IMPORTANT: This must match API_SECRET_KEY in your Railway environment
+    private let apiKey = "bad3515c210e9b769dcb3276cb18553ebff1f0b3935c84f4f1d3aedc064c30e4"
     
     // MARK: - Errors
     enum APIError: LocalizedError {
@@ -26,6 +29,8 @@ final class APIService {
         case serverError(Int, String?)
         case decodingFailed
         case noEventFound
+        case rateLimited(String)
+        case imageTooLarge
         
         var errorDescription: String? {
             switch self {
@@ -43,6 +48,10 @@ final class APIService {
                 return "Failed to parse server response"
             case .noEventFound:
                 return "No event was detected in the screenshot"
+            case .rateLimited(let message):
+                return message
+            case .imageTooLarge:
+                return "Image is too large. Please try a smaller screenshot."
             }
         }
     }
@@ -118,6 +127,7 @@ final class APIService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         
         let body: [String: Any] = [
             "image": base64Image,
@@ -153,7 +163,18 @@ final class APIService {
                 "error": "server_error",
                 "status_code": httpResponse.statusCode
             ])
-            throw APIError.serverError(httpResponse.statusCode, errorMessage)
+            
+            // Handle specific error codes
+            switch httpResponse.statusCode {
+            case 429:
+                // Rate limited - parse message from response if available
+                let message = parseErrorDetail(from: data) ?? "You've reached your daily limit. Try again tomorrow."
+                throw APIError.rateLimited(message)
+            case 413:
+                throw APIError.imageTooLarge
+            default:
+                throw APIError.serverError(httpResponse.statusCode, errorMessage)
+            }
         }
         
         // Decode response
@@ -177,6 +198,15 @@ final class APIService {
         }
         
         return analyzeResponse
+    }
+    
+    // MARK: - Helper Methods
+    /// Parse error detail from JSON response
+    private func parseErrorDetail(from data: Data) -> String? {
+        struct ErrorResponse: Codable {
+            let detail: String
+        }
+        return try? JSONDecoder().decode(ErrorResponse.self, from: data).detail
     }
     
     // MARK: - Health Check
