@@ -27,7 +27,7 @@ struct CaptureMobileApp: App {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         
         if #available(iOS 16.0, *) {
-            // This makes the "Send to Capture" action available in Shortcuts
+            // Update system about app shortcuts (currently empty - we use iCloud shortcut instead)
             CaptureShortcuts.updateAppShortcutParameters()
         }
     }

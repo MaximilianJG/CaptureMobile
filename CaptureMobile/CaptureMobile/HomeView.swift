@@ -11,9 +11,8 @@ import PostHog
 struct HomeView: View {
     @ObservedObject var authManager = GoogleAuthManager.shared
     @ObservedObject var captureHistory = CaptureHistoryManager.shared
-    @AppStorage("shortcutCreated") private var shortcutCreated = false
-    @AppStorage("howItWorksExpanded") private var howItWorksExpanded = true
     @State private var showManageSheet = false
+    @State private var showSetupPopup = false
     
     var body: some View {
         ZStack {
@@ -28,21 +27,18 @@ struct HomeView: View {
                     // Profile Card
                     profileCard
                     
-                    // Setup Shortcut (only if not configured)
-                    if !shortcutCreated {
-                        setupShortcutCard
+                    // Setup section (only if no captures yet)
+                    if captureHistory.recentCaptures.isEmpty {
+                        setupSection
                     }
-                    
-                    // How it works (collapsible)
-                    howItWorksSection
                     
                     // Recent Captures (only if there are captures)
                     if !captureHistory.recentCaptures.isEmpty {
                         recentCapturesSection
                     }
                     
-                    // Subtle re-add shortcut link (always visible at bottom)
-                    reAddShortcutLink
+                    // Footer link
+                    footerLink
                 }
                 .padding(.top, 8)
                 .padding(.bottom, 32)
@@ -51,6 +47,9 @@ struct HomeView: View {
         .preferredColorScheme(.light)
         .sheet(isPresented: $showManageSheet) {
             ManageAccountSheet()
+        }
+        .sheet(isPresented: $showSetupPopup) {
+            SetupSheet()
         }
     }
     
@@ -62,18 +61,31 @@ struct HomeView: View {
             
             Spacer()
             
-            Button(action: {}) {
-                Text("Free Plan")
+            Button(action: { showSetupPopup = true }) {
+                Text("Setup")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(.white)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
-                    .background(Color.white, in: Capsule())
-                    .overlay(Capsule().stroke(Color.black.opacity(0.15), lineWidth: 1))
+                    .background(Color.black, in: Capsule())
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
+    }
+    
+    // MARK: - Setup Section (inline)
+    private var setupSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Setup")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 20)
+            
+            SetupContentView()
+                .padding(.horizontal, 20)
+        }
     }
     
     // MARK: - Profile Card
@@ -100,10 +112,6 @@ struct HomeView: View {
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                
-                Label("Connected", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.green)
             }
             
             Spacer()
@@ -124,67 +132,6 @@ struct HomeView: View {
         .padding(16)
         .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08), lineWidth: 1))
-        .padding(.horizontal, 20)
-    }
-    
-    // MARK: - Setup Shortcut Card
-    private var setupShortcutCard: some View {
-        Button(action: {
-            // Track shortcut install tap
-            PostHogSDK.shared.capture("shortcut_install_tapped")
-            
-            // Directly open Shortcuts app - no popup
-            ShortcutManager.shared.installShortcut()
-            shortcutCreated = true
-        }) {
-            VStack(spacing: 12) {
-                // Icon with badge
-                ZStack {
-                    Circle()
-                        .fill(Color.white.opacity(0.2))
-                        .frame(width: 56, height: 56)
-                    
-                    Image(systemName: "arrow.down.app.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.white)
-                }
-                
-                // Text
-                VStack(spacing: 4) {
-                    Text("Setup iOS Shortcut")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.white)
-                    
-                    Text("Required to capture screenshots")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-                
-                // CTA
-                HStack(spacing: 6) {
-                    Text("Tap to install")
-                        .font(.system(size: 14, weight: .semibold))
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundStyle(.black)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
-                .background(Color.white, in: Capsule())
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 24)
-            .padding(.horizontal, 20)
-            .background(
-                LinearGradient(
-                    colors: [Color.black, Color.black.opacity(0.85)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                in: RoundedRectangle(cornerRadius: 20)
-            )
-        }
-        .buttonStyle(.plain)
         .padding(.horizontal, 20)
     }
     
@@ -212,127 +159,156 @@ struct HomeView: View {
         }
     }
     
-    // MARK: - How It Works (Collapsible)
-    private var howItWorksSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Collapsible header
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    howItWorksExpanded.toggle()
-                }
-            }) {
-                HStack {
-                    Text("How it works")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
-                    
-                    Spacer()
-                    
-                    Image(systemName: howItWorksExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 20)
-                .contentShape(Rectangle())
+    // MARK: - Footer Link
+    private var footerLink: some View {
+        Button(action: {
+            PostHogSDK.shared.capture("feedback_tapped")
+            if let url = URL(string: "https://maximilianglasmacher.notion.site/2d037e9160b7805faf48c8daed29daa7?pvs=105") {
+                UIApplication.shared.open(url)
             }
-            .buttonStyle(.plain)
-            
-            if howItWorksExpanded {
-                VStack(spacing: 0) {
-                    StepRow(
-                        number: 1,
-                        title: "Take a screenshot",
-                        subtitle: "Use the shortcut to take a screenshot of an event"
-                    )
-                    Divider().padding(.leading, 60)
-                    StepRow(
-                        number: 2,
-                        title: "AI analyzes",
-                        subtitle: "AI analyzes this screenshot and extracts information"
-                    )
-                    Divider().padding(.leading, 60)
-                    StepRow(
-                        number: 3,
-                        title: "Event created",
-                        subtitle: "AI creates the relevant event in your calendar"
-                    )
-                }
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08), lineWidth: 1))
-                .padding(.horizontal, 20)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: "bubble.left")
+                    .font(.system(size: 12))
+                Text("Send Feedback")
+                    .font(.system(size: 13))
             }
+            .foregroundStyle(.secondary)
         }
-    }
-    
-    // MARK: - Re-add Shortcut Link (subtle, always visible)
-    private var reAddShortcutLink: some View {
-        HStack(spacing: 16) {
-            Button(action: {
-                PostHogSDK.shared.capture("shortcut_readd_tapped")
-                ShortcutManager.shared.installShortcut()
-                shortcutCreated = true
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12))
-                    Text("Re-add Shortcut")
-                        .font(.system(size: 13))
-                }
-                .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            
-            Text("·")
-                .foregroundStyle(.quaternary)
-            
-            Button(action: {
-                PostHogSDK.shared.capture("feedback_tapped")
-                if let url = URL(string: "https://maximilianglasmacher.notion.site/2d037e9160b7805faf48c8daed29daa7?pvs=105") {
-                    UIApplication.shared.open(url)
-                }
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "bubble.left")
-                        .font(.system(size: 12))
-                    Text("Send Feedback")
-                        .font(.system(size: 13))
-                }
-                .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
+        .buttonStyle(.plain)
         .padding(.top, 8)
     }
 }
 
-// MARK: - Step Row
-private struct StepRow: View {
+// MARK: - Setup Content View (Reusable)
+struct SetupContentView: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            // Step 1: Install Shortcut (with button on same line)
+            HStack(spacing: 12) {
+                Image(systemName: "square.and.arrow.down")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Color.black, in: RoundedRectangle(cornerRadius: 8))
+                
+                Text("Install Shortcut")
+                    .font(.system(size: 16, weight: .semibold))
+                
+                Spacer(minLength: 8)
+                
+                Button(action: {
+                    PostHogSDK.shared.capture("shortcut_install_tapped")
+                    ShortcutManager.shared.installShortcut()
+                }) {
+                    Text("Tap to install")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.black, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            
+            Divider().padding(.leading, 60)
+            
+            // Step 2: Bind to Control Center (with numbered sub-steps)
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "switch.2")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Color.black, in: RoundedRectangle(cornerRadius: 8))
+                
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Bind to Control Center")
+                        .font(.system(size: 16, weight: .semibold))
+                    
+                    VStack(alignment: .leading, spacing: 6) {
+                        SetupSubStep(number: 1, text: "Swipe down from the top right edge")
+                        SetupSubStep(number: 2, text: "Add a control in the top left")
+                        SetupSubStep(number: 3, text: "Search for \"Run Shortcut\" control")
+                        SetupSubStep(number: 4, text: "Search for \"Capture something\"")
+                    }
+                }
+                
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            
+            Divider().padding(.leading, 60)
+            
+            // Step 3: Start Capturing (title only)
+            HStack(spacing: 12) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Color.black, in: RoundedRectangle(cornerRadius: 8))
+                
+                Text("Start Capturing!")
+                    .font(.system(size: 16, weight: .semibold))
+                
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            
+            // Video placeholder (for future)
+            // Rectangle().fill(Color.gray.opacity(0.1)).frame(height: 200)
+        }
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08), lineWidth: 1))
+    }
+}
+
+// MARK: - Setup Sub Step (for numbered instructions)
+private struct SetupSubStep: View {
     let number: Int
-    let title: String
-    let subtitle: String
+    let text: String
     
     var body: some View {
-        HStack(spacing: 14) {
-            Text("\(number)")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
-                .background(.black, in: Circle())
+        HStack(alignment: .top, spacing: 8) {
+            Text("\(number).")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+                .frame(width: 16, alignment: .leading)
             
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold))
-                Text(subtitle)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
-            }
-            
-            Spacer()
+            Text(text)
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+    }
+}
+
+// MARK: - Setup Sheet (Popup)
+struct SetupSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                SetupContentView()
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Setup")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+        .preferredColorScheme(.light)
     }
 }
 

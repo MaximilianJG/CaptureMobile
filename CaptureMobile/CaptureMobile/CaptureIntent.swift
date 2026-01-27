@@ -189,20 +189,12 @@ struct CaptureScreenshotIntent: AppIntent {
 }
 
 /// Shortcuts App Provider - registers all intents with the system
+/// Note: We intentionally return an empty array so "Send to Capture" doesn't appear
+/// in the App Shortcuts gallery. Users should use our pre-made iCloud shortcut instead,
+/// which provides the complete workflow (Take Screenshot → Send to Capture).
 @available(iOS 16.0, *)
 struct CaptureShortcuts: AppShortcutsProvider {
-    
-    /// Pre-built shortcuts that appear in the Shortcuts app gallery
     static var appShortcuts: [AppShortcut] {
-        AppShortcut(
-            intent: CaptureScreenshotIntent(),
-            phrases: [
-                "Send to \(.applicationName)",
-                "Send screenshot to \(.applicationName)",
-                "Create event from screenshot with \(.applicationName)"
-            ],
-            shortTitle: "Send to Capture",
-            systemImageName: "camera.viewfinder"
-        )
+        return [AppShortcut]()
     }
 }
