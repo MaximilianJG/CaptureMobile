@@ -190,8 +190,8 @@ async def health_check():
 )
 @limiter.limit(f"{RATE_LIMIT_PER_MINUTE}/minute")
 async def analyze_screenshot(
-    request: AnalyzeScreenshotRequest,
-    http_request: Request,
+    request: Request,
+    body: AnalyzeScreenshotRequest,
     _: None = Depends(verify_api_key),
 ):
     """
@@ -206,7 +206,7 @@ async def analyze_screenshot(
     6. Creates an event in the user's Google Calendar
     
     Args:
-        request: Contains base64 encoded image and Google OAuth access token
+        body: Contains base64 encoded image and Google OAuth access token
         
     Returns:
         Success status, created event details, and status message
@@ -218,10 +218,10 @@ async def analyze_screenshot(
     
     try:
         # Step 0: Validate image size
-        validate_image_size(request.image)
+        validate_image_size(body.image)
         
         # Step 1: Validate Google token and get user info
-        user_info = await calendar_service.validate_token(request.access_token)
+        user_info = await calendar_service.validate_token(body.access_token)
         if not user_info:
             print(f"[{timestamp}] ❌ AUTH ERROR: Invalid or expired token")
             print(f"{'='*50}\n")
@@ -247,7 +247,7 @@ async def analyze_screenshot(
         
         # Step 2: Analyze screenshot with OpenAI Vision
         print(f"[{timestamp}] 🤖 Analyzing screenshot with AI...")
-        analysis_result = await openai_service.analyze_screenshot(request.image)
+        analysis_result = await openai_service.analyze_screenshot(body.image)
         
         if not analysis_result.found_event:
             print(f"[{timestamp}] ⚠️  NO EVENT FOUND in screenshot")
@@ -275,7 +275,7 @@ async def analyze_screenshot(
         # Step 3: Create calendar event
         print(f"[{timestamp}] 📅 Creating calendar event...")
         created_event = await calendar_service.create_event(
-            access_token=request.access_token,
+            access_token=body.access_token,
             event_info=event_info
         )
         
@@ -336,7 +336,7 @@ async def analyze_screenshot(
 # ============================================
 
 @app.get("/stats", tags=["Monitoring"])
-async def get_stats(http_request: Request, _: None = Depends(verify_api_key)):
+async def get_stats(request: Request, _: None = Depends(verify_api_key)):
     """Get current usage statistics (requires API key)."""
     stats = daily_tracker.get_stats()
     return {
