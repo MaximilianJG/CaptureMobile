@@ -42,7 +42,7 @@ struct CapturedEvent: Codable, Identifiable {
 final class CaptureHistoryManager: ObservableObject {
     static let shared = CaptureHistoryManager()
     
-    private let maxCaptures = 5
+    private let maxCaptures = 20
     private let storageKey = "recent_captures"
     
     @Published var recentCaptures: [CapturedEvent] = []
