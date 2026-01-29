@@ -213,21 +213,21 @@ async def analyze_screenshot(
     """
     start_time = time.time()
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    print(f"\n[{timestamp}] === NEW CAPTURE REQUEST ===")
+    print(f"\n[{timestamp}] === NEW CAPTURE REQUEST ===", flush=True)
     
     try:
         # Step 0: Validate image size
         validate_image_size(body.image)
         image_size_kb = len(body.image) / 1024
-        print(f"[{timestamp}] Image size: {image_size_kb:.0f} KB")
+        print(f"[{timestamp}] Image size: {image_size_kb:.0f} KB", flush=True)
         
         # Step 1: Check daily limits using user_id
         user_id = body.user_id
-        print(f"[{timestamp}] User: {user_id[:20]}..." if len(user_id) > 20 else f"[{timestamp}] User: {user_id}")
+        print(f"[{timestamp}] User: {user_id[:20]}..." if len(user_id) > 20 else f"[{timestamp}] User: {user_id}", flush=True)
         
         allowed, error_msg = daily_tracker.check_and_increment(user_id)
         if not allowed:
-            print(f"[{timestamp}] RATE LIMITED: {error_msg}")
+            print(f"[{timestamp}] RATE LIMITED: {error_msg}", flush=True)
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=error_msg
@@ -235,14 +235,14 @@ async def analyze_screenshot(
         
         # Step 2: Analyze screenshot with OpenAI Vision
         openai_start = time.time()
-        print(f"[{timestamp}] Sending to OpenAI...")
+        print(f"[{timestamp}] Sending to OpenAI...", flush=True)
         analysis_result = await openai_service.analyze_screenshot(body.image)
         openai_elapsed = time.time() - openai_start
-        print(f"[{timestamp}] OpenAI completed in {openai_elapsed:.1f}s")
+        print(f"[{timestamp}] OpenAI completed in {openai_elapsed:.1f}s", flush=True)
         
         if not analysis_result.found_events or len(analysis_result.events) == 0:
             total_elapsed = time.time() - start_time
-            print(f"[{timestamp}] No events found (total: {total_elapsed:.1f}s)")
+            print(f"[{timestamp}] No events found (total: {total_elapsed:.1f}s)", flush=True)
             return AnalyzeScreenshotResponse(
                 success=False,
                 events_to_create=[],
@@ -250,9 +250,9 @@ async def analyze_screenshot(
             )
         
         # Log detected events (compact format)
-        print(f"[{timestamp}] Found {len(analysis_result.events)} event(s):")
+        print(f"[{timestamp}] Found {len(analysis_result.events)} event(s):", flush=True)
         for idx, event_info in enumerate(analysis_result.events, 1):
-            print(f"[{timestamp}]   {idx}. {event_info.title} | {event_info.date} {event_info.start_time or 'all-day'}")
+            print(f"[{timestamp}]   {idx}. {event_info.title} | {event_info.date} {event_info.start_time or 'all-day'}", flush=True)
         
         # Step 3: Return events for client to create locally
         total_elapsed = time.time() - start_time
@@ -261,7 +261,7 @@ async def analyze_screenshot(
         else:
             message = f"Found {len(analysis_result.events)} events"
         
-        print(f"[{timestamp}] SUCCESS: {message} (total: {total_elapsed:.1f}s)")
+        print(f"[{timestamp}] SUCCESS: {message} (total: {total_elapsed:.1f}s)", flush=True)
         
         return AnalyzeScreenshotResponse(
             success=True,
@@ -272,7 +272,7 @@ async def analyze_screenshot(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[{timestamp}] ERROR: {str(e)}")
+        print(f"[{timestamp}] ERROR: {str(e)}", flush=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process screenshot: {str(e)}"

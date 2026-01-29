@@ -44,7 +44,7 @@ class OpenAIService:
             system_prompt = self._get_system_prompt()
             
             # Call OpenAI Vision API
-            print(f"  [OpenAI] Calling {self.model} API...")
+            print(f"  [OpenAI] Calling {self.model} API...", flush=True)
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -77,7 +77,7 @@ class OpenAIService:
             
             # Log token usage
             usage = response.usage
-            print(f"  [OpenAI] API response in {api_elapsed:.1f}s | tokens: {usage.prompt_tokens} in, {usage.completion_tokens} out")
+            print(f"  [OpenAI] API response in {api_elapsed:.1f}s | tokens: {usage.prompt_tokens} in, {usage.completion_tokens} out", flush=True)
             
             # Parse the response
             result_text = response.choices[0].message.content
