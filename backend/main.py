@@ -211,9 +211,7 @@ async def analyze_screenshot(
         Success status, list of events to create, and status message
     """
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    print(f"\n{'='*50}")
-    print(f"[{timestamp}] 📸 NEW CAPTURE REQUEST")
-    print(f"{'='*50}")
+    print(f"\n[{timestamp}] === NEW CAPTURE REQUEST ===")
     
     try:
         # Step 0: Validate image size
@@ -221,49 +219,32 @@ async def analyze_screenshot(
         
         # Step 1: Check daily limits using user_id
         user_id = body.user_id
-        print(f"[{timestamp}] 👤 User ID: {user_id[:20]}..." if len(user_id) > 20 else f"[{timestamp}] 👤 User ID: {user_id}")
+        print(f"[{timestamp}] User: {user_id[:20]}..." if len(user_id) > 20 else f"[{timestamp}] User: {user_id}")
         
         allowed, error_msg = daily_tracker.check_and_increment(user_id)
         if not allowed:
             stats = daily_tracker.get_stats()
-            print(f"[{timestamp}] ⛔ RATE LIMITED: {error_msg}")
-            print(f"[{timestamp}] 📊 Stats: {stats}")
-            print(f"{'='*50}\n")
+            print(f"[{timestamp}] RATE LIMITED: {error_msg}")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=error_msg
             )
         
-        # Step 2: Analyze screenshot with OpenAI Vision (supports multiple events)
-        print(f"[{timestamp}] 🤖 Analyzing screenshot with AI...")
+        # Step 2: Analyze screenshot with OpenAI Vision
+        print(f"[{timestamp}] Analyzing...")
         analysis_result = await openai_service.analyze_screenshot(body.image)
         
         if not analysis_result.found_events or len(analysis_result.events) == 0:
-            print(f"[{timestamp}] ⚠️  NO EVENTS FOUND in screenshot")
-            print(f"[{timestamp}] 📝 Raw text: {analysis_result.raw_text[:200] if analysis_result.raw_text else 'None'}...")
-            print(f"{'='*50}\n")
+            print(f"[{timestamp}] No events found")
             return AnalyzeScreenshotResponse(
                 success=False,
                 events_to_create=[],
                 message="No event information found in the screenshot. Please try a clearer image."
             )
         
-        print(f"[{timestamp}] ✅ {analysis_result.event_count} EVENT(S) DETECTED:")
-        
-        # Log each detected event
+        # Log detected events (compact format)
         for idx, event_info in enumerate(analysis_result.events, 1):
-            source_app = getattr(event_info, 'source_app', None)
-            print(f"[{timestamp}] 📌 Event {idx}/{analysis_result.event_count}:")
-            print(f"        Title: {event_info.title or 'Untitled'}")
-            print(f"        📅 Date: {event_info.date or 'Unknown'}")
-            print(f"        🕐 Time: {event_info.start_time or 'All day'} - {event_info.end_time or 'N/A'}")
-            print(f"        📍 Location: {event_info.location or 'None'}")
-            print(f"        👤 Attendee: {getattr(event_info, 'attendee_name', None) or 'None'}")
-            print(f"        📱 SOURCE APP: {source_app or 'NOT DETECTED'}")
-            print(f"        🎯 Confidence: {(event_info.confidence or 0.5):.0%}")
-        
-        if analysis_result.raw_text:
-            print(f"[{timestamp}] 📝 Raw text: {analysis_result.raw_text[:150]}...")
+            print(f"[{timestamp}] Event {idx}: {event_info.title} | {event_info.date} {event_info.start_time or 'all-day'}")
         
         # Step 3: Return events for client to create locally
         if len(analysis_result.events) == 1:
@@ -271,8 +252,7 @@ async def analyze_screenshot(
         else:
             message = f"Found {len(analysis_result.events)} events"
         
-        print(f"[{timestamp}] ✅ SUCCESS: {message}")
-        print(f"{'='*50}\n")
+        print(f"[{timestamp}] SUCCESS: {message}")
         
         return AnalyzeScreenshotResponse(
             success=True,
@@ -283,8 +263,7 @@ async def analyze_screenshot(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[{timestamp}] ❌ SERVER ERROR: {str(e)}")
-        print(f"{'='*50}\n")
+        print(f"[{timestamp}] ERROR: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process screenshot: {str(e)}"

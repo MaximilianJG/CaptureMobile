@@ -260,6 +260,18 @@ final class CalendarService: ObservableObject {
         return (createdIDs, failedCount)
     }
     
+    // MARK: - Fetch Event
+    
+    /// Fetch an event by its identifier
+    func getEvent(withIdentifier identifier: String) -> EKEvent? {
+        return eventStore.event(withIdentifier: identifier)
+    }
+    
+    /// Get the event store (needed for EKEventViewController)
+    var store: EKEventStore {
+        return eventStore
+    }
+    
     // MARK: - Errors
     
     enum CalendarError: LocalizedError {

@@ -79,14 +79,27 @@ struct CaptureScreenshotIntent: AppIntent {
             return .result(value: "❌ No calendar access. Please open Capture app and grant calendar permission.")
         }
         
-        // Send to backend and create events locally
+        // Process in background to avoid Shortcut timeout
+        // Return immediately and send notification when done
+        Task.detached {
+            await processScreenshot(image)
+        }
+        
+        PostHogSDK.shared.flush()
+        return .result(value: "📸 Processing screenshot...")
+    }
+    
+    // Open the app when there's an error (optional)
+    static var openAppWhenRun: Bool = false
+    
+    // MARK: - Background Processing
+    
+    private func processScreenshot(_ image: UIImage) async {
         do {
             let result = try await APIService.shared.analyzeAndCreateEvents(image)
             
             if result.eventsCreated > 0 {
-                // Build notification and result based on event count
                 if result.eventsCreated == 1 {
-                    // Single event
                     sendNotification(
                         title: "Event Created",
                         body: result.firstEventTitle ?? "Event"
@@ -97,10 +110,7 @@ struct CaptureScreenshotIntent: AppIntent {
                         "event_title": result.firstEventTitle ?? "Event",
                         "event_count": 1
                     ])
-                    PostHogSDK.shared.flush()
-                    return .result(value: "✅ Created: \(result.firstEventTitle ?? "Event")")
                 } else {
-                    // Multiple events
                     sendNotification(
                         title: "\(result.eventsCreated) Events Created",
                         body: result.message
@@ -110,12 +120,10 @@ struct CaptureScreenshotIntent: AppIntent {
                         "success": true,
                         "event_count": result.eventsCreated
                     ])
-                    PostHogSDK.shared.flush()
-                    return .result(value: "✅ Created \(result.eventsCreated) events")
                 }
             } else {
                 sendNotification(
-                    title: "Event Creation Failed",
+                    title: "No Events Created",
                     body: result.message
                 )
                 
@@ -123,11 +131,8 @@ struct CaptureScreenshotIntent: AppIntent {
                     "success": false,
                     "error": result.message
                 ])
-                PostHogSDK.shared.flush()
-                return .result(value: "⚠️ \(result.message)")
             }
         } catch let error as APIService.APIError {
-            // Handle specific API errors
             let errorMessage: String
             let notificationTitle: String
             
@@ -152,10 +157,7 @@ struct CaptureScreenshotIntent: AppIntent {
                 "success": false,
                 "error": errorMessage
             ])
-            PostHogSDK.shared.flush()
-            return .result(value: "❌ \(errorMessage)")
         } catch {
-            // Send error notification
             sendNotification(
                 title: "Capture Failed",
                 body: error.localizedDescription
@@ -165,13 +167,10 @@ struct CaptureScreenshotIntent: AppIntent {
                 "success": false,
                 "error": error.localizedDescription
             ])
-            PostHogSDK.shared.flush()
-            return .result(value: "❌ Error: \(error.localizedDescription)")
         }
+        
+        PostHogSDK.shared.flush()
     }
-    
-    // Open the app when there's an error (optional)
-    static var openAppWhenRun: Bool = false
     
     // MARK: - Notification Helpers
     

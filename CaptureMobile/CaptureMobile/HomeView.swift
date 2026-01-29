@@ -7,6 +7,7 @@
 
 import SwiftUI
 import PostHog
+import EventKitUI
 
 struct HomeView: View {
     @ObservedObject var authManager = AppleAuthManager.shared
@@ -330,9 +331,10 @@ struct SetupSheet: View {
 // MARK: - Capture Row
 private struct CaptureRow: View {
     let capture: CapturedEvent
+    @State private var showingEventDetail = false
     
     var body: some View {
-        Button(action: openInCalendar) {
+        Button(action: showEventDetail) {
             HStack(spacing: 14) {
                 // Source app icon
                 Image(systemName: capture.sourceAppIcon)
@@ -375,22 +377,99 @@ private struct CaptureRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .sheet(isPresented: $showingEventDetail) {
+            EventDetailSheet(eventIdentifier: capture.id, eventDate: capture.eventDate)
+        }
+    }
+    
+    private func showEventDetail() {
+        // Check if event exists before showing sheet
+        if CalendarService.shared.getEvent(withIdentifier: capture.id) != nil {
+            showingEventDetail = true
+        } else {
+            // Event not found - fall back to opening Calendar
+            openInCalendar()
+        }
     }
     
     private func openInCalendar() {
-        // Parse the event date and open Calendar app at that date
         guard let date = capture.eventDate else {
-            // Fallback: just open Calendar app
             if let url = URL(string: "calshow:") {
                 UIApplication.shared.open(url)
             }
             return
         }
         
-        // calshow: takes a Unix timestamp (seconds since Jan 1, 2001 for NSDate reference)
         let timestamp = date.timeIntervalSinceReferenceDate
         if let url = URL(string: "calshow:\(timestamp)") {
             UIApplication.shared.open(url)
+        }
+    }
+}
+
+// MARK: - Event Detail Sheet
+struct EventDetailSheet: View {
+    let eventIdentifier: String
+    let eventDate: Date?
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        EventDetailViewController(
+            eventIdentifier: eventIdentifier,
+            onDismiss: { dismiss() }
+        )
+        .ignoresSafeArea()
+    }
+}
+
+// MARK: - Event Detail View Controller (UIKit wrapper)
+struct EventDetailViewController: UIViewControllerRepresentable {
+    let eventIdentifier: String
+    let onDismiss: () -> Void
+    
+    func makeUIViewController(context: Context) -> UINavigationController {
+        let eventVC = EKEventViewController()
+        
+        // Fetch the event
+        if let event = CalendarService.shared.getEvent(withIdentifier: eventIdentifier) {
+            eventVC.event = event
+        }
+        
+        eventVC.allowsEditing = true
+        eventVC.allowsCalendarPreview = true
+        eventVC.delegate = context.coordinator
+        
+        let navController = UINavigationController(rootViewController: eventVC)
+        
+        // Add done button
+        eventVC.navigationItem.leftBarButtonItem = UIBarButtonItem(
+            barButtonSystemItem: .done,
+            target: context.coordinator,
+            action: #selector(Coordinator.donePressed)
+        )
+        
+        return navController
+    }
+    
+    func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onDismiss: onDismiss)
+    }
+    
+    class Coordinator: NSObject, EKEventViewDelegate {
+        let onDismiss: () -> Void
+        
+        init(onDismiss: @escaping () -> Void) {
+            self.onDismiss = onDismiss
+        }
+        
+        @objc func donePressed() {
+            onDismiss()
+        }
+        
+        func eventViewController(_ controller: EKEventViewController, didCompleteWith action: EKEventViewAction) {
+            onDismiss()
         }
     }
 }
