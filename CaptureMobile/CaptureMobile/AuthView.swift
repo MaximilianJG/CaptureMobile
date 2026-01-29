@@ -6,9 +6,10 @@
 //
 
 import SwiftUI
+import AuthenticationServices
 
 struct AuthView: View {
-    @ObservedObject var authManager = GoogleAuthManager.shared
+    @ObservedObject var authManager = AppleAuthManager.shared
     
     var body: some View {
         GeometryReader { geometry in
@@ -61,13 +62,17 @@ struct AuthView: View {
                                 .controlSize(.large)
                         } else {
                             Button(action: {
-                                Task { await authManager.signIn() }
+                                authManager.signIn()
                             }) {
-                                Text("Sign in with Google")
-                                    .font(.system(size: 18, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .frame(maxWidth: 260, minHeight: 54)
-                                    .background(.black, in: Capsule())
+                                HStack(spacing: 8) {
+                                    Image(systemName: "apple.logo")
+                                        .font(.system(size: 18, weight: .medium))
+                                    Text("Sign in with Apple")
+                                        .font(.system(size: 18, weight: .semibold))
+                                }
+                                .foregroundStyle(.white)
+                                .frame(width: 260, height: 54)
+                                .background(.black, in: Capsule())
                             }
                             .buttonStyle(.plain)
                         }

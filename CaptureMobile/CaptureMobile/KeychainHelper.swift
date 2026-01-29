@@ -16,11 +16,9 @@ final class KeychainHelper {
     
     // MARK: - Keys
     enum Key: String {
-        case accessToken = "google_access_token"
-        case refreshToken = "google_refresh_token"
+        case appleUserID = "apple_user_id"
         case userEmail = "user_email"
         case userName = "user_name"
-        case userProfileURL = "user_profile_url"
     }
     
     // MARK: - Save

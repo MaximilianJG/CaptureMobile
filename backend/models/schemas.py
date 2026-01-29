@@ -14,29 +14,17 @@ from datetime import datetime
 class AnalyzeScreenshotRequest(BaseModel):
     """Request body for screenshot analysis endpoint."""
     image: str = Field(..., description="Base64 encoded image data")
-    access_token: str = Field(..., description="Google OAuth access token")
+    user_id: str = Field(..., description="Apple user ID for rate limiting")
 
 
 # ============================================
 # Response Schemas
 # ============================================
 
-class EventDetails(BaseModel):
-    """Details of a created calendar event."""
-    id: Optional[str] = Field(None, description="Google Calendar event ID")
-    title: str = Field(..., description="Event title")
-    start_time: str = Field(..., description="Event start time in ISO format")
-    end_time: Optional[str] = Field(None, description="Event end time in ISO format")
-    location: Optional[str] = Field(None, description="Event location")
-    description: Optional[str] = Field(None, description="Event description")
-    calendar_link: Optional[str] = Field(None, description="Link to the event in Google Calendar")
-    source_app: Optional[str] = Field(None, description="Source app the screenshot was taken from")
-
-
 class AnalyzeScreenshotResponse(BaseModel):
-    """Response from screenshot analysis endpoint."""
-    success: bool = Field(..., description="Whether the operation was successful")
-    events_created: List[EventDetails] = Field(default_factory=list, description="List of created events")
+    """Response from screenshot analysis endpoint - returns events for client to create."""
+    success: bool = Field(..., description="Whether events were found")
+    events_to_create: List["ExtractedEventInfo"] = Field(default_factory=list, description="Events for client to create locally")
     message: str = Field(..., description="Status message")
 
 

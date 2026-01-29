@@ -23,7 +23,7 @@ final class APIService {
     // MARK: - Errors
     enum APIError: LocalizedError {
         case invalidURL
-        case noAccessToken
+        case noUserID
         case encodingFailed
         case networkError(Error)
         case serverError(Int, String?)
@@ -31,12 +31,13 @@ final class APIService {
         case noEventFound
         case rateLimited(String)
         case imageTooLarge
+        case calendarError(String)
         
         var errorDescription: String? {
             switch self {
             case .invalidURL:
                 return "Invalid URL configuration"
-            case .noAccessToken:
+            case .noUserID:
                 return "Not authenticated. Please sign in again."
             case .encodingFailed:
                 return "Failed to encode image"
@@ -52,69 +53,101 @@ final class APIService {
                 return message
             case .imageTooLarge:
                 return "Image is too large. Please try a smaller screenshot."
+            case .calendarError(let message):
+                return message
             }
         }
     }
     
     // MARK: - Response Models
+    
+    /// Response from backend - contains events to create locally
     struct AnalyzeResponse: Codable {
         let success: Bool
-        let eventsCreated: [EventDetails]
+        let eventsToCreate: [ExtractedEventInfo]
         let message: String
         
         enum CodingKeys: String, CodingKey {
             case success
-            case eventsCreated = "events_created"
+            case eventsToCreate = "events_to_create"
             case message
         }
         
-        /// Convenience property for single event (backward compatibility)
-        var eventCreated: EventDetails? {
-            return eventsCreated.first
-        }
-        
-        /// Number of events created
+        /// Number of events found
         var eventCount: Int {
-            return eventsCreated.count
+            return eventsToCreate.count
         }
     }
     
-    struct EventDetails: Codable {
-        let id: String?
+    /// Event info extracted by backend (matches backend ExtractedEventInfo schema)
+    struct ExtractedEventInfo: Codable {
         let title: String
-        let startTime: String
+        let date: String
+        let startTime: String?
         let endTime: String?
         let location: String?
         let description: String?
-        let calendarLink: String?
+        let timezone: String?
+        let isAllDay: Bool
+        let isDeadline: Bool
+        let confidence: Double
+        let attendeeName: String?
         let sourceApp: String?
         
         enum CodingKeys: String, CodingKey {
-            case id
             case title
+            case date
             case startTime = "start_time"
             case endTime = "end_time"
             case location
             case description
-            case calendarLink = "calendar_link"
+            case timezone
+            case isAllDay = "is_all_day"
+            case isDeadline = "is_deadline"
+            case confidence
+            case attendeeName = "attendee_name"
             case sourceApp = "source_app"
+        }
+        
+        /// Convert to CalendarService.ExtractedEvent
+        func toCalendarEvent() -> CalendarService.ExtractedEvent {
+            return CalendarService.ExtractedEvent(
+                title: title,
+                date: date,
+                startTime: startTime,
+                endTime: endTime,
+                location: location,
+                description: description,
+                timezone: timezone,
+                isAllDay: isAllDay,
+                isDeadline: isDeadline,
+                sourceApp: sourceApp
+            )
         }
     }
     
+    /// Result after creating events locally
+    struct CaptureResult {
+        let eventsCreated: Int
+        let eventsFailed: Int
+        let firstEventTitle: String?
+        let message: String
+    }
+    
     // MARK: - Analyze Screenshot
-    /// Sends a screenshot to the backend for analysis and calendar event creation
+    /// Sends a screenshot to the backend for analysis and creates events locally
     /// - Parameter image: The screenshot image to analyze
-    /// - Returns: The analysis response with event details
-    func analyzeScreenshot(_ image: UIImage) async throws -> AnalyzeResponse {
+    /// - Returns: The capture result with created event info
+    func analyzeAndCreateEvents(_ image: UIImage) async throws -> CaptureResult {
         // Track screenshot sent
         PostHogSDK.shared.capture("screenshot_sent")
         
-        // Get access token
-        guard let accessToken = await GoogleAuthManager.shared.getAccessToken() else {
+        // Get user ID
+        guard let userID = AppleAuthManager.shared.getUserID() else {
             PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "no_access_token"
+                "error": "no_user_id"
             ])
-            throw APIError.noAccessToken
+            throw APIError.noUserID
         }
         
         // Encode image to base64
@@ -141,7 +174,7 @@ final class APIService {
         
         let body: [String: Any] = [
             "image": base64Image,
-            "access_token": accessToken
+            "user_id": userID
         ]
         
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
@@ -177,7 +210,6 @@ final class APIService {
             // Handle specific error codes
             switch httpResponse.statusCode {
             case 429:
-                // Rate limited - parse message from response if available
                 let message = parseErrorDetail(from: data) ?? "You've reached your daily limit. Try again tomorrow."
                 throw APIError.rateLimited(message)
             case 413:
@@ -196,22 +228,56 @@ final class APIService {
             throw APIError.decodingFailed
         }
         
-        // Track success or failure
-        if analyzeResponse.success && !analyzeResponse.eventsCreated.isEmpty {
-            // Track each created event
-            for event in analyzeResponse.eventsCreated {
-                PostHogSDK.shared.capture("event_created_success", properties: [
-                    "event_title": event.title,
-                    "event_count": analyzeResponse.eventCount
-                ])
-            }
-        } else {
+        // Check if events were found
+        if !analyzeResponse.success || analyzeResponse.eventsToCreate.isEmpty {
             PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": analyzeResponse.message
+                "error": "no_events_found"
             ])
+            throw APIError.noEventFound
         }
         
-        return analyzeResponse
+        // Create events locally via EventKit
+        let calendarEvents = analyzeResponse.eventsToCreate.map { $0.toCalendarEvent() }
+        let (createdIDs, failedCount) = CalendarService.shared.createEvents(calendarEvents)
+        
+        // Track results
+        if createdIDs.isEmpty {
+            PostHogSDK.shared.capture("event_created_failed", properties: [
+                "error": "calendar_creation_failed",
+                "events_found": analyzeResponse.eventCount
+            ])
+            throw APIError.calendarError("Failed to create events in calendar")
+        }
+        
+        // Track success and add to capture history
+        for (index, event) in analyzeResponse.eventsToCreate.enumerated() where index < createdIDs.count {
+            PostHogSDK.shared.capture("event_created_success", properties: [
+                "event_title": event.title,
+                "event_count": createdIDs.count,
+                "source_app": event.sourceApp ?? "unknown"
+            ])
+            
+            // Add to capture history
+            CaptureHistoryManager.shared.addCapture(event, eventID: createdIDs[index])
+        }
+        
+        // Build result
+        let firstTitle = analyzeResponse.eventsToCreate.first?.title
+        let message: String
+        if createdIDs.count == 1 {
+            message = "Event '\(firstTitle ?? "Event")' created successfully!"
+        } else if failedCount == 0 {
+            message = "Successfully created \(createdIDs.count) events!"
+        } else {
+            message = "Created \(createdIDs.count) of \(analyzeResponse.eventCount) events (\(failedCount) failed)."
+        }
+        
+        return CaptureResult(
+            eventsCreated: createdIDs.count,
+            eventsFailed: failedCount,
+            firstEventTitle: firstTitle,
+            message: message
+        )
     }
     
     // MARK: - Helper Methods
@@ -243,52 +309,64 @@ final class APIService {
 #if DEBUG
 extension APIService {
     /// Mock response for testing without backend (single event)
-    func mockAnalyzeScreenshot() -> AnalyzeResponse {
+    func mockAnalyzeResponse() -> AnalyzeResponse {
         return AnalyzeResponse(
             success: true,
-            eventsCreated: [
-                EventDetails(
-                    id: "mock-event-123",
+            eventsToCreate: [
+                ExtractedEventInfo(
                     title: "Team Meeting",
-                    startTime: "2026-01-20T10:00:00",
-                    endTime: "2026-01-20T11:00:00",
+                    date: "2026-01-20",
+                    startTime: "10:00",
+                    endTime: "11:00",
                     location: "Conference Room A",
                     description: "Weekly team sync",
-                    calendarLink: "https://calendar.google.com/event?eid=mock123",
+                    timezone: "Europe/Berlin",
+                    isAllDay: false,
+                    isDeadline: false,
+                    confidence: 0.9,
+                    attendeeName: nil,
                     sourceApp: "WhatsApp"
                 )
             ],
-            message: "Event created successfully!"
+            message: "Found event: 'Team Meeting'"
         )
     }
     
     /// Mock response for testing multiple events
-    func mockAnalyzeScreenshotMultiple() -> AnalyzeResponse {
+    func mockAnalyzeResponseMultiple() -> AnalyzeResponse {
         return AnalyzeResponse(
             success: true,
-            eventsCreated: [
-                EventDetails(
-                    id: "mock-event-123",
+            eventsToCreate: [
+                ExtractedEventInfo(
                     title: "Team Meeting",
-                    startTime: "2026-01-20T10:00:00",
-                    endTime: "2026-01-20T11:00:00",
+                    date: "2026-01-20",
+                    startTime: "10:00",
+                    endTime: "11:00",
                     location: "Conference Room A",
                     description: "Weekly team sync",
-                    calendarLink: "https://calendar.google.com/event?eid=mock123",
+                    timezone: "Europe/Berlin",
+                    isAllDay: false,
+                    isDeadline: false,
+                    confidence: 0.9,
+                    attendeeName: nil,
                     sourceApp: "WhatsApp"
                 ),
-                EventDetails(
-                    id: "mock-event-456",
+                ExtractedEventInfo(
                     title: "Lunch with Sarah",
-                    startTime: "2026-01-20T12:30:00",
-                    endTime: "2026-01-20T13:30:00",
+                    date: "2026-01-20",
+                    startTime: "12:30",
+                    endTime: "13:30",
                     location: "Cafe Berlin",
                     description: "Catch up over lunch",
-                    calendarLink: "https://calendar.google.com/event?eid=mock456",
+                    timezone: "Europe/Berlin",
+                    isAllDay: false,
+                    isDeadline: false,
+                    confidence: 0.85,
+                    attendeeName: "Sarah",
                     sourceApp: "iMessage"
                 )
             ],
-            message: "Successfully created 2 events!"
+            message: "Found 2 events"
         )
     }
 }

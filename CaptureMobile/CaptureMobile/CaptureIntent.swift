@@ -59,8 +59,8 @@ struct CaptureScreenshotIntent: AppIntent {
             return .result(value: "❌ Failed to read screenshot")
         }
         
-        // Get the access token
-        guard let accessToken = await GoogleAuthManager.shared.getAccessToken() else {
+        // Check if user is signed in
+        guard AppleAuthManager.shared.getUserID() != nil else {
             PostHogSDK.shared.capture("shortcut_completed", properties: [
                 "success": false,
                 "error": "not_signed_in"
@@ -69,71 +69,91 @@ struct CaptureScreenshotIntent: AppIntent {
             return .result(value: "❌ Not signed in. Please open Capture app and sign in first.")
         }
         
-        // Send to backend
+        // Check calendar access
+        guard CalendarService.shared.hasAccess else {
+            PostHogSDK.shared.capture("shortcut_completed", properties: [
+                "success": false,
+                "error": "no_calendar_access"
+            ])
+            PostHogSDK.shared.flush()
+            return .result(value: "❌ No calendar access. Please open Capture app and grant calendar permission.")
+        }
+        
+        // Send to backend and create events locally
         do {
-            let response = try await APIService.shared.analyzeScreenshot(image)
+            let result = try await APIService.shared.analyzeAndCreateEvents(image)
             
-            if response.success && !response.eventsCreated.isEmpty {
-                // Save all events to capture history
-                for event in response.eventsCreated {
-                    CaptureHistoryManager.shared.addCapture(event)
-                }
-                
+            if result.eventsCreated > 0 {
                 // Build notification and result based on event count
-                let eventCount = response.eventsCreated.count
-                if eventCount == 1, let event = response.eventsCreated.first {
+                if result.eventsCreated == 1 {
                     // Single event
                     sendNotification(
                         title: "Event Created",
-                        body: "\(event.title)\n\(formatEventTime(event))"
+                        body: result.firstEventTitle ?? "Event"
                     )
                     
                     PostHogSDK.shared.capture("shortcut_completed", properties: [
                         "success": true,
-                        "event_title": event.title,
+                        "event_title": result.firstEventTitle ?? "Event",
                         "event_count": 1
                     ])
                     PostHogSDK.shared.flush()
-                    return .result(value: "✅ Created: \(event.title)")
+                    return .result(value: "✅ Created: \(result.firstEventTitle ?? "Event")")
                 } else {
                     // Multiple events
-                    let eventTitles = response.eventsCreated.map { $0.title }.joined(separator: ", ")
                     sendNotification(
-                        title: "\(eventCount) Events Created",
-                        body: eventTitles
+                        title: "\(result.eventsCreated) Events Created",
+                        body: result.message
                     )
                     
                     PostHogSDK.shared.capture("shortcut_completed", properties: [
                         "success": true,
-                        "event_count": eventCount
+                        "event_count": result.eventsCreated
                     ])
                     PostHogSDK.shared.flush()
-                    return .result(value: "✅ Created \(eventCount) events")
+                    return .result(value: "✅ Created \(result.eventsCreated) events")
                 }
             } else {
-                // Check if it's "no event found" or "calendar creation failed"
-                let isNoEventFound = response.message.lowercased().contains("no event") || 
-                                     response.message.lowercased().contains("not found")
-                
-                if isNoEventFound {
-                    sendNotification(
-                        title: "No Event Found",
-                        body: "Couldn't detect an event in your screenshot"
-                    )
-                } else {
-                    sendNotification(
-                        title: "Event Creation Failed",
-                        body: response.message
-                    )
-                }
+                sendNotification(
+                    title: "Event Creation Failed",
+                    body: result.message
+                )
                 
                 PostHogSDK.shared.capture("shortcut_completed", properties: [
                     "success": false,
-                    "error": response.message
+                    "error": result.message
                 ])
                 PostHogSDK.shared.flush()
-                return .result(value: "⚠️ \(response.message)")
+                return .result(value: "⚠️ \(result.message)")
             }
+        } catch let error as APIService.APIError {
+            // Handle specific API errors
+            let errorMessage: String
+            let notificationTitle: String
+            
+            switch error {
+            case .noEventFound:
+                notificationTitle = "No Event Found"
+                errorMessage = "Couldn't detect an event in your screenshot"
+            case .rateLimited(let message):
+                notificationTitle = "Rate Limited"
+                errorMessage = message
+            case .calendarError(let message):
+                notificationTitle = "Calendar Error"
+                errorMessage = message
+            default:
+                notificationTitle = "Capture Failed"
+                errorMessage = error.localizedDescription
+            }
+            
+            sendNotification(title: notificationTitle, body: errorMessage)
+            
+            PostHogSDK.shared.capture("shortcut_completed", properties: [
+                "success": false,
+                "error": errorMessage
+            ])
+            PostHogSDK.shared.flush()
+            return .result(value: "❌ \(errorMessage)")
         } catch {
             // Send error notification
             sendNotification(
@@ -167,45 +187,6 @@ struct CaptureScreenshotIntent: AppIntent {
             trigger: nil  // nil = send immediately
         )
         UNUserNotificationCenter.current().add(request)
-    }
-    
-    private func formatEventTime(_ event: APIService.EventDetails) -> String {
-        // Parse the ISO date string
-        let dateTimeFormatter = DateFormatter()
-        dateTimeFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
-        
-        let dateOnlyFormatter = DateFormatter()
-        dateOnlyFormatter.dateFormat = "yyyy-MM-dd"
-        
-        var date: Date?
-        
-        // Try date with time first
-        date = dateTimeFormatter.date(from: event.startTime)
-        
-        // Try date only
-        if date == nil {
-            date = dateOnlyFormatter.date(from: event.startTime)
-        }
-        
-        guard let parsedDate = date else {
-            return event.startTime
-        }
-        
-        // Format for display
-        let displayFormatter = DateFormatter()
-        let calendar = Calendar.current
-        
-        if calendar.isDateInToday(parsedDate) {
-            displayFormatter.dateFormat = "'Today,' HH:mm"
-        } else if calendar.isDateInTomorrow(parsedDate) {
-            displayFormatter.dateFormat = "'Tomorrow,' HH:mm"
-        } else if calendar.isDate(parsedDate, equalTo: Date(), toGranularity: .weekOfYear) {
-            displayFormatter.dateFormat = "EEEE, HH:mm"
-        } else {
-            displayFormatter.dateFormat = "MMM d, HH:mm"
-        }
-        
-        return displayFormatter.string(from: parsedDate)
     }
 }
 

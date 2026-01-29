@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import GoogleSignIn
 import AppIntents
 import PostHog
 import UserNotifications
@@ -35,10 +34,6 @@ struct CaptureMobileApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .onOpenURL { url in
-                    // Handle Google Sign-In callback URL
-                    GIDSignIn.sharedInstance.handle(url)
-                }
         }
     }
 }

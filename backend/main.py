@@ -2,14 +2,14 @@
 Capture Backend - Screenshot to Calendar Event API
 
 This FastAPI server receives screenshots, analyzes them with OpenAI Vision
-to extract event information, and creates events in Google Calendar.
+to extract event information. Events are created locally by the iOS app via EventKit.
 """
 
 import os
 from datetime import datetime, date
 from contextlib import asynccontextmanager
 from collections import defaultdict
-from typing import Dict, List
+from typing import Dict
 
 from fastapi import FastAPI, HTTPException, status, Request, Depends
 from fastapi.responses import JSONResponse
@@ -22,10 +22,8 @@ from models.schemas import (
     AnalyzeScreenshotRequest,
     AnalyzeScreenshotResponse,
     HealthResponse,
-    EventDetails,
 )
 from services.openai_service import OpenAIService
-from services.calendar_service import GoogleCalendarService
 
 # Load environment variables
 load_dotenv()
@@ -62,7 +60,7 @@ class DailyLimitTracker:
             self.current_date = today
             print(f"🔄 Daily limits reset for {today}")
     
-    def check_and_increment(self, user_email: str) -> tuple[bool, str]:
+    def check_and_increment(self, user_id: str) -> tuple[bool, str]:
         """
         Check if request is allowed and increment counters.
         Returns (allowed: bool, error_message: str)
@@ -74,12 +72,12 @@ class DailyLimitTracker:
             return False, f"Daily limit reached ({GLOBAL_DAILY_LIMIT} requests). Try again tomorrow."
         
         # Check per-user daily limit
-        if self.user_counts[user_email] >= PER_USER_DAILY_LIMIT:
+        if self.user_counts[user_id] >= PER_USER_DAILY_LIMIT:
             return False, f"You've reached your daily limit ({PER_USER_DAILY_LIMIT} captures). Try again tomorrow."
         
         # Increment counters
         self.global_count += 1
-        self.user_counts[user_email] += 1
+        self.user_counts[user_id] += 1
         
         return True, ""
     
@@ -96,7 +94,6 @@ daily_tracker = DailyLimitTracker()
 
 # Initialize services
 openai_service = OpenAIService()
-calendar_service = GoogleCalendarService()
 
 
 # ============================================
@@ -133,7 +130,6 @@ async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Capture Backend starting up...")
     print(f"📍 OpenAI configured: {bool(os.getenv('OPENAI_API_KEY'))}")
-    print(f"📍 Google Client ID configured: {bool(os.getenv('GOOGLE_CLIENT_ID'))}")
     print(f"🔐 API Key configured: {bool(API_SECRET_KEY)}")
     print(f"📊 Rate limits: {RATE_LIMIT_PER_MINUTE}/min, {GLOBAL_DAILY_LIMIT}/day global, {PER_USER_DAILY_LIMIT}/day per user")
     yield
@@ -144,8 +140,8 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title="Capture API",
-    description="Screenshot to Calendar Event conversion API",
-    version="1.0.0",
+    description="Screenshot to Calendar Event extraction API - events created locally via EventKit",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -195,21 +191,24 @@ async def analyze_screenshot(
     _: None = Depends(verify_api_key),
 ):
     """
-    Analyze a screenshot for event information and create calendar events.
+    Analyze a screenshot for event information.
     
-    This endpoint supports MULTIPLE events per screenshot:
+    This endpoint extracts calendar events from screenshots using OpenAI Vision.
+    Events are returned to the client for local creation via EventKit.
+    
+    Supports MULTIPLE events per screenshot.
+    
+    Steps:
     1. Verifies API key (X-API-Key header)
-    2. Checks rate limits (per-minute and daily)
-    3. Validates the Google OAuth token
-    4. Sends the image to OpenAI Vision for analysis
-    5. Extracts ALL event details (title, date, time, location) - supports multiple events
-    6. Creates events in the user's Google Calendar for each detected event
+    2. Checks rate limits (per-minute and daily) using user_id
+    3. Sends the image to OpenAI Vision for analysis
+    4. Returns extracted event details for client to create locally
     
     Args:
-        body: Contains base64 encoded image and Google OAuth access token
+        body: Contains base64 encoded image and Apple user ID
         
     Returns:
-        Success status, list of created events, and status message
+        Success status, list of events to create, and status message
     """
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     print(f"\n{'='*50}")
@@ -220,21 +219,11 @@ async def analyze_screenshot(
         # Step 0: Validate image size
         validate_image_size(body.image)
         
-        # Step 1: Validate Google token and get user info
-        user_info = await calendar_service.validate_token(body.access_token)
-        if not user_info:
-            print(f"[{timestamp}] ❌ AUTH ERROR: Invalid or expired token")
-            print(f"{'='*50}\n")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired Google access token"
-            )
+        # Step 1: Check daily limits using user_id
+        user_id = body.user_id
+        print(f"[{timestamp}] 👤 User ID: {user_id[:20]}..." if len(user_id) > 20 else f"[{timestamp}] 👤 User ID: {user_id}")
         
-        user_email = user_info.get('email', 'unknown')
-        print(f"[{timestamp}] ✅ AUTH OK: {user_email}")
-        
-        # Step 1.5: Check daily limits (per-request, not per-event)
-        allowed, error_msg = daily_tracker.check_and_increment(user_email)
+        allowed, error_msg = daily_tracker.check_and_increment(user_id)
         if not allowed:
             stats = daily_tracker.get_stats()
             print(f"[{timestamp}] ⛔ RATE LIMITED: {error_msg}")
@@ -255,16 +244,13 @@ async def analyze_screenshot(
             print(f"{'='*50}\n")
             return AnalyzeScreenshotResponse(
                 success=False,
-                events_created=[],
+                events_to_create=[],
                 message="No event information found in the screenshot. Please try a clearer image."
             )
         
         print(f"[{timestamp}] ✅ {analysis_result.event_count} EVENT(S) DETECTED:")
         
-        # Step 3: Create calendar events for each detected event
-        created_events: List[EventDetails] = []
-        failed_count = 0
-        
+        # Log each detected event
         for idx, event_info in enumerate(analysis_result.events, 1):
             source_app = getattr(event_info, 'source_app', None)
             print(f"[{timestamp}] 📌 Event {idx}/{analysis_result.event_count}:")
@@ -275,69 +261,22 @@ async def analyze_screenshot(
             print(f"        👤 Attendee: {getattr(event_info, 'attendee_name', None) or 'None'}")
             print(f"        📱 SOURCE APP: {source_app or 'NOT DETECTED'}")
             print(f"        🎯 Confidence: {(event_info.confidence or 0.5):.0%}")
-            
-            # Create calendar event
-            print(f"[{timestamp}] 📅 Creating calendar event {idx}...")
-            created_event = await calendar_service.create_event(
-                access_token=body.access_token,
-                event_info=event_info
-            )
-            
-            if not created_event:
-                print(f"[{timestamp}] ❌ CALENDAR ERROR: Failed to create event {idx}")
-                failed_count += 1
-                continue
-            
-            # Build start_time string
-            start_time_str = event_info.date
-            if event_info.start_time:
-                start_time_str += "T" + event_info.start_time
-            
-            # Build end_time string (can be None)
-            end_time_str = None
-            if event_info.end_time:
-                end_time_str = event_info.date + "T" + event_info.end_time
-            
-            event_details = EventDetails(
-                id=created_event.get("id"),
-                title=event_info.title,
-                start_time=start_time_str,
-                end_time=end_time_str,
-                location=event_info.location,
-                description=event_info.description,
-                calendar_link=created_event.get("htmlLink"),
-                source_app=event_info.source_app
-            )
-            created_events.append(event_details)
-            print(f"[{timestamp}] ✅ Event {idx} created: {created_event.get('htmlLink')}")
         
         if analysis_result.raw_text:
             print(f"[{timestamp}] 📝 Raw text: {analysis_result.raw_text[:150]}...")
         
-        # Step 4: Return response
-        if len(created_events) == 0:
-            print(f"[{timestamp}] ❌ CALENDAR ERROR: Failed to create any events")
-            print(f"{'='*50}\n")
-            return AnalyzeScreenshotResponse(
-                success=False,
-                events_created=[],
-                message=f"Detected {analysis_result.event_count} event(s) but failed to create any in Google Calendar."
-            )
-        
-        # Build success message
-        if len(created_events) == 1:
-            message = f"Event '{created_events[0].title}' created successfully!"
-        elif failed_count == 0:
-            message = f"Successfully created {len(created_events)} events!"
+        # Step 3: Return events for client to create locally
+        if len(analysis_result.events) == 1:
+            message = f"Found event: '{analysis_result.events[0].title}'"
         else:
-            message = f"Created {len(created_events)} of {analysis_result.event_count} events ({failed_count} failed)."
+            message = f"Found {len(analysis_result.events)} events"
         
         print(f"[{timestamp}] ✅ SUCCESS: {message}")
         print(f"{'='*50}\n")
         
         return AnalyzeScreenshotResponse(
             success=True,
-            events_created=created_events,
+            events_to_create=analysis_result.events,
             message=message
         )
         

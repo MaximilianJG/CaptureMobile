@@ -2,20 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>CFBundleURLName</key>
-			<string>Google Sign-in</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>com.googleusercontent.apps.856010422332-44nqgg7om2qont9etlto9hneqj1avahd</string>
-			</array>
-		</dict>
-	</array>
-	<key>GIDClientID</key>
-	<string>856010422332-44nqgg7om2qont9etlto9hneqj1avahd.apps.googleusercontent.com</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Capture needs access to your calendars to save events from screenshots.</string>
 </dict>
 </plist>

@@ -9,10 +9,12 @@ import SwiftUI
 import PostHog
 
 struct HomeView: View {
-    @ObservedObject var authManager = GoogleAuthManager.shared
+    @ObservedObject var authManager = AppleAuthManager.shared
     @ObservedObject var captureHistory = CaptureHistoryManager.shared
+    @ObservedObject var calendarService = CalendarService.shared
     @State private var showManageSheet = false
     @State private var showSetupPopup = false
+    @State private var showCalendarPermissionAlert = false
     
     var body: some View {
         ZStack {
@@ -26,6 +28,9 @@ struct HomeView: View {
                     
                     // Profile Card
                     profileCard
+                    
+                    // Calendar Selection
+                    calendarSection
                     
                     // Setup section (only if no captures yet)
                     if captureHistory.recentCaptures.isEmpty {
@@ -51,6 +56,25 @@ struct HomeView: View {
         .sheet(isPresented: $showSetupPopup) {
             SetupSheet()
         }
+        .alert("Calendar Access Required", isPresented: $showCalendarPermissionAlert) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Please enable calendar access in Settings to save events.")
+        }
+        .task {
+            // Request calendar access on first appearance
+            if !calendarService.hasAccess {
+                let granted = await calendarService.requestAccess()
+                if !granted {
+                    showCalendarPermissionAlert = true
+                }
+            }
+        }
     }
     
     // MARK: - Header
@@ -74,6 +98,11 @@ struct HomeView: View {
         .padding(.horizontal, 20)
     }
     
+    // MARK: - Calendar Section
+    private var calendarSection: some View {
+        CalendarPickerView()
+    }
+    
     // MARK: - Setup Section (inline)
     private var setupSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -91,24 +120,20 @@ struct HomeView: View {
     // MARK: - Profile Card
     private var profileCard: some View {
         HStack(spacing: 12) {
-            // Avatar
-            AsyncImage(url: authManager.currentUser?.profileImageURL) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Image(systemName: "person.circle.fill")
-                    .resizable()
-                    .foregroundStyle(.quaternary)
-            }
-            .frame(width: 48, height: 48)
-            .clipShape(Circle())
+            // Avatar (Apple Sign In doesn't provide profile images)
+            Image(systemName: "person.circle.fill")
+                .resizable()
+                .foregroundStyle(.quaternary)
+                .frame(width: 48, height: 48)
+                .clipShape(Circle())
             
             // Info
             VStack(alignment: .leading, spacing: 2) {
-                Text(authManager.currentUser?.name ?? "User")
+                Text(authManager.currentUser?.displayName ?? "User")
                     .font(.system(size: 16, weight: .semibold))
                     .lineLimit(1)
                 
-                Text(authManager.currentUser?.email ?? "")
+                Text(authManager.currentUser?.displayEmail ?? "")
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -258,9 +283,6 @@ struct SetupContentView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            
-            // Video placeholder (for future)
-            // Rectangle().fill(Color.gray.opacity(0.1)).frame(height: 200)
         }
         .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08), lineWidth: 1))
@@ -317,86 +339,64 @@ private struct CaptureRow: View {
     let capture: CapturedEvent
     
     var body: some View {
-        Button(action: {
-            openCalendarLink()
-        }) {
-            HStack(spacing: 14) {
-                // Source app icon
-                Image(systemName: capture.sourceAppIcon)
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(Color.black, in: RoundedRectangle(cornerRadius: 8))
+        HStack(spacing: 14) {
+            // Source app icon
+            Image(systemName: capture.sourceAppIcon)
+                .font(.system(size: 16))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(Color.black, in: RoundedRectangle(cornerRadius: 8))
+            
+            // Event details
+            VStack(alignment: .leading, spacing: 2) {
+                Text(capture.title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
                 
-                // Event details
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(capture.title)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(capture.formattedDate)
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
                     
-                    HStack(spacing: 4) {
-                        Text(capture.formattedDate)
+                    if let sourceApp = capture.sourceApp {
+                        Text("·")
+                            .foregroundStyle(.quaternary)
+                        Text(sourceApp)
                             .font(.system(size: 14))
                             .foregroundStyle(.secondary)
-                        
-                        if let sourceApp = capture.sourceApp {
-                            Text("·")
-                                .foregroundStyle(.quaternary)
-                            Text(sourceApp)
-                                .font(.system(size: 14))
-                                .foregroundStyle(.secondary)
-                        }
                     }
                 }
-                
-                Spacer()
-                
-                // Chevron
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
+            
+            Spacer()
         }
-        .buttonStyle(.plain)
-    }
-    
-    private func openCalendarLink() {
-        guard let link = capture.calendarLink,
-              let url = URL(string: link) else {
-            return
-        }
-        UIApplication.shared.open(url)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
     }
 }
 
 // MARK: - Manage Account Sheet
 struct ManageAccountSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var authManager = GoogleAuthManager.shared
+    @ObservedObject var authManager = AppleAuthManager.shared
     
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
                 // Profile
                 VStack(spacing: 10) {
-                    AsyncImage(url: authManager.currentUser?.profileImageURL) { image in
-                        image.resizable().scaledToFill()
-                    } placeholder: {
-                        Image(systemName: "person.circle.fill")
-                            .resizable()
-                            .foregroundStyle(.quaternary)
-                    }
-                    .frame(width: 72, height: 72)
-                    .clipShape(Circle())
+                    Image(systemName: "person.circle.fill")
+                        .resizable()
+                        .foregroundStyle(.quaternary)
+                        .frame(width: 72, height: 72)
+                        .clipShape(Circle())
                     
-                    Text(authManager.currentUser?.name ?? "User")
+                    Text(authManager.currentUser?.displayName ?? "User")
                         .font(.system(size: 18, weight: .semibold))
                     
-                    Text(authManager.currentUser?.email ?? "")
+                    Text(authManager.currentUser?.displayEmail ?? "Apple ID User")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }

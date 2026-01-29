@@ -17,17 +17,22 @@ struct CapturedEvent: Codable, Identifiable {
     let sourceApp: String?
     let capturedAt: Date
     
-    /// Creates a CapturedEvent from an API EventDetails response
-    init(from eventDetails: APIService.EventDetails) {
-        self.id = eventDetails.id ?? UUID().uuidString
-        self.title = eventDetails.title
-        self.startTime = eventDetails.startTime
-        self.calendarLink = eventDetails.calendarLink
-        self.sourceApp = eventDetails.sourceApp
+    /// Creates a CapturedEvent from an ExtractedEventInfo response
+    init(from eventInfo: APIService.ExtractedEventInfo, eventID: String? = nil) {
+        self.id = eventID ?? UUID().uuidString
+        self.title = eventInfo.title
+        // Build start time string from date and time
+        if let time = eventInfo.startTime {
+            self.startTime = "\(eventInfo.date)T\(time)"
+        } else {
+            self.startTime = eventInfo.date
+        }
+        self.calendarLink = nil  // EventKit events don't have web links
+        self.sourceApp = eventInfo.sourceApp
         self.capturedAt = Date()
     }
     
-    /// Creates a CapturedEvent directly (for testing)
+    /// Creates a CapturedEvent directly (for testing or direct creation)
     init(id: String, title: String, startTime: String, calendarLink: String?, sourceApp: String?, capturedAt: Date = Date()) {
         self.id = id
         self.title = title
@@ -53,10 +58,12 @@ final class CaptureHistoryManager: ObservableObject {
     
     // MARK: - Public Methods
     
-    /// Adds a new capture to the history
-    /// - Parameter eventDetails: The event details from the API response
-    func addCapture(_ eventDetails: APIService.EventDetails) {
-        let capture = CapturedEvent(from: eventDetails)
+    /// Adds a new capture to the history from extracted event info
+    /// - Parameters:
+    ///   - eventInfo: The event info from the API response
+    ///   - eventID: Optional EventKit event identifier
+    func addCapture(_ eventInfo: APIService.ExtractedEventInfo, eventID: String? = nil) {
+        let capture = CapturedEvent(from: eventInfo, eventID: eventID)
         addCapture(capture)
     }
     
