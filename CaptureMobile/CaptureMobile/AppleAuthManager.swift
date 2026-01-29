@@ -109,7 +109,9 @@ class AppleAuthManager: NSObject, ObservableObject {
         ])
         PostHogSDK.shared.reset()
         
-        keychain.clearAll()
+        // Only clear the user ID - keep name/email so they're available on re-sign-in
+        // (Apple only provides name/email on FIRST sign-in ever)
+        _ = keychain.delete(forKey: .appleUserID)
         
         // Reset shortcut setup flag
         UserDefaults.standard.removeObject(forKey: "shortcutCreated")

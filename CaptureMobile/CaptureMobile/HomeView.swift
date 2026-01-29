@@ -120,13 +120,6 @@ struct HomeView: View {
     // MARK: - Profile Card
     private var profileCard: some View {
         HStack(spacing: 12) {
-            // Avatar (Apple Sign In doesn't provide profile images)
-            Image(systemName: "person.circle.fill")
-                .resizable()
-                .foregroundStyle(.quaternary)
-                .frame(width: 48, height: 48)
-                .clipShape(Circle())
-            
             // Info
             VStack(alignment: .leading, spacing: 2) {
                 Text(authManager.currentUser?.displayName ?? "User")
@@ -339,41 +332,66 @@ private struct CaptureRow: View {
     let capture: CapturedEvent
     
     var body: some View {
-        HStack(spacing: 14) {
-            // Source app icon
-            Image(systemName: capture.sourceAppIcon)
-                .font(.system(size: 16))
-                .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
-                .background(Color.black, in: RoundedRectangle(cornerRadius: 8))
-            
-            // Event details
-            VStack(alignment: .leading, spacing: 2) {
-                Text(capture.title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+        Button(action: openInCalendar) {
+            HStack(spacing: 14) {
+                // Source app icon
+                Image(systemName: capture.sourceAppIcon)
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Color.black, in: RoundedRectangle(cornerRadius: 8))
                 
-                HStack(spacing: 4) {
-                    Text(capture.formattedDate)
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
+                // Event details
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(capture.title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
                     
-                    if let sourceApp = capture.sourceApp {
-                        Text("·")
-                            .foregroundStyle(.quaternary)
-                        Text(sourceApp)
+                    HStack(spacing: 4) {
+                        Text(capture.formattedDate)
                             .font(.system(size: 14))
                             .foregroundStyle(.secondary)
+                        
+                        if let sourceApp = capture.sourceApp {
+                            Text("·")
+                                .foregroundStyle(.quaternary)
+                            Text(sourceApp)
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
+                
+                Spacer()
+                
+                // Chevron to indicate tappable
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.tertiary)
             }
-            
-            Spacer()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .contentShape(Rectangle())
+        .buttonStyle(.plain)
+    }
+    
+    private func openInCalendar() {
+        // Parse the event date and open Calendar app at that date
+        guard let date = capture.eventDate else {
+            // Fallback: just open Calendar app
+            if let url = URL(string: "calshow:") {
+                UIApplication.shared.open(url)
+            }
+            return
+        }
+        
+        // calshow: takes a Unix timestamp (seconds since Jan 1, 2001 for NSDate reference)
+        let timestamp = date.timeIntervalSinceReferenceDate
+        if let url = URL(string: "calshow:\(timestamp)") {
+            UIApplication.shared.open(url)
+        }
     }
 }
 
@@ -386,13 +404,7 @@ struct ManageAccountSheet: View {
         NavigationStack {
             VStack(spacing: 24) {
                 // Profile
-                VStack(spacing: 10) {
-                    Image(systemName: "person.circle.fill")
-                        .resizable()
-                        .foregroundStyle(.quaternary)
-                        .frame(width: 72, height: 72)
-                        .clipShape(Circle())
-                    
+                VStack(spacing: 6) {
                     Text(authManager.currentUser?.displayName ?? "User")
                         .font(.system(size: 18, weight: .semibold))
                     
@@ -400,7 +412,7 @@ struct ManageAccountSheet: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
-                .padding(.top, 16)
+                .padding(.top, 24)
                 
                 Divider().padding(.horizontal, 24)
                 

@@ -130,6 +130,34 @@ final class CaptureHistoryManager: ObservableObject {
 // MARK: - Helper Extensions
 
 extension CapturedEvent {
+    /// Returns the parsed event date, or nil if parsing fails
+    var eventDate: Date? {
+        // Try different formats
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withFullDate, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+        
+        // Try full ISO format first
+        if let date = isoFormatter.date(from: startTime) {
+            return date
+        }
+        
+        // Try date with time
+        let dateTimeFormatter = DateFormatter()
+        dateTimeFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        if let date = dateTimeFormatter.date(from: startTime) {
+            return date
+        }
+        
+        // Try date only format
+        let dateOnlyFormatter = DateFormatter()
+        dateOnlyFormatter.dateFormat = "yyyy-MM-dd"
+        if let date = dateOnlyFormatter.date(from: startTime) {
+            return date
+        }
+        
+        return nil
+    }
+    
     /// Returns a formatted date string for display
     var formattedDate: String {
         // Parse the ISO date string
