@@ -18,6 +18,9 @@ final class BackgroundUploadManager: NSObject {
     // Unique identifier for our background session
     static let sessionIdentifier = "com.capture.backgroundUpload"
     
+    // Unique identifier for fallback notification (so we can cancel it)
+    private static let fallbackNotificationID = "com.capture.fallbackNotification"
+    
     // Shared container for App Groups (if needed in future)
     private let apiKey = "bad3515c210e9b769dcb3276cb18553ebff1f0b3935c84f4f1d3aedc064c30e4"
     private let baseURL = "https://capturemobile-production.up.railway.app"
@@ -115,9 +118,42 @@ final class BackgroundUploadManager: NSObject {
         // Start the upload
         task.resume()
         
+        // Schedule fallback notification (fires in 2 minutes if not cancelled)
+        scheduleFallbackNotification()
+        
         PostHogSDK.shared.capture("background_upload_started")
         
         return true
+    }
+    
+    // MARK: - Fallback Notification
+    
+    /// Schedules a fallback notification that fires in 2 minutes
+    /// This acts as a "dead man's switch" - if processing completes, we cancel it
+    /// If the app was force-quit and can't complete, this reminds the user to open the app
+    private func scheduleFallbackNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = "Capture is still processing..."
+        content.body = "Open the app to finish."
+        content.sound = .default
+        
+        // Fire in 2 minutes
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 120, repeats: false)
+        
+        let request = UNNotificationRequest(
+            identifier: Self.fallbackNotificationID,
+            content: content,
+            trigger: trigger
+        )
+        
+        UNUserNotificationCenter.current().add(request)
+    }
+    
+    /// Cancels the fallback notification (called when processing completes successfully or with error)
+    private func cancelFallbackNotification() {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(
+            withIdentifiers: [Self.fallbackNotificationID]
+        )
     }
     
     // MARK: - Persistence (survives app termination)
@@ -154,6 +190,27 @@ final class BackgroundUploadManager: NSObject {
         )
         UNUserNotificationCenter.current().add(request)
     }
+    
+    /// Creates a truncated string of event names that fits in one line
+    private func truncateEventNames(_ names: [String], maxLength: Int) -> String {
+        var result = ""
+        for (index, name) in names.enumerated() {
+            let separator = index == 0 ? "" : ", "
+            let potentialResult = result + separator + name
+            
+            if potentialResult.count > maxLength {
+                // Truncate and add ellipsis
+                if result.isEmpty {
+                    // First name is already too long
+                    return String(name.prefix(maxLength - 3)) + "..."
+                } else {
+                    return result + "..."
+                }
+            }
+            result = potentialResult
+        }
+        return result
+    }
 }
 
 // MARK: - URLSessionDelegate
@@ -187,6 +244,9 @@ extension BackgroundUploadManager: URLSessionTaskDelegate {
         }
         
         if let error = error {
+            // Cancel fallback notification since we're handling the error
+            cancelFallbackNotification()
+            
             PostHogSDK.shared.capture("background_upload_failed", properties: [
                 "error": error.localizedDescription
             ])
@@ -203,6 +263,9 @@ extension BackgroundUploadManager: URLSessionTaskDelegate {
 extension BackgroundUploadManager: URLSessionDataDelegate {
     
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        // Cancel fallback notification - we got a response
+        cancelFallbackNotification()
+        
         // Parse the response
         guard let httpResponse = dataTask.response as? HTTPURLResponse else {
             sendNotification(title: "Capture Failed", body: "Invalid response")
@@ -254,12 +317,18 @@ extension BackgroundUploadManager: URLSessionDataDelegate {
             CaptureHistoryManager.shared.addCapture(event, eventID: createdIDs[index])
         }
         
+        // Mark as successful - clears the "processing shown" flag
+        CaptureProcessingState.shared.markSuccess()
+        
         // Send success notification
         if createdIDs.count == 1 {
             let title = response.eventsToCreate.first?.title ?? "Event"
             sendNotification(title: "Event Created", body: title)
         } else {
-            sendNotification(title: "\(createdIDs.count) Events Created", body: response.message)
+            // Build truncated list of event names for the body
+            let eventNames = response.eventsToCreate.prefix(createdIDs.count).map { $0.title }
+            let truncatedBody = truncateEventNames(eventNames, maxLength: 50)
+            sendNotification(title: "\(createdIDs.count) Events Created", body: truncatedBody)
         }
         
         PostHogSDK.shared.capture("background_upload_completed", properties: [

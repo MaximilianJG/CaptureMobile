@@ -8,6 +8,7 @@
 import SwiftUI
 import PostHog
 import EventKitUI
+import Combine
 
 struct HomeView: View {
     @ObservedObject var authManager = AppleAuthManager.shared
@@ -17,6 +18,10 @@ struct HomeView: View {
     @State private var showManageSheet = false
     @State private var showSetupPopup = false
     @State private var showCalendarPermissionAlert = false
+    
+    // Timer to refresh "captured ago" times every 30 seconds
+    @State private var timeRefreshTrigger = Date()
+    let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     
     var body: some View {
         ZStack {
@@ -35,18 +40,19 @@ struct HomeView: View {
                     calendarSection
                     
                     // Processing indicator (when analyzing a screenshot)
-                    if processingState.isProcessing {
+                    if processingState.isProcessing && !processingState.hasPendingFailure {
                         processingSection
                     }
                     
-                    // Setup section (only if no captures yet and not processing)
-                    if captureHistory.recentCaptures.isEmpty && !processingState.isProcessing {
+                    // Setup section (only if no captures yet and not processing and no failure)
+                    if captureHistory.recentCaptures.isEmpty && !processingState.isProcessing && !processingState.hasPendingFailure {
                         setupSection
                     }
                     
-                    // Recent Captures (only if there are captures)
-                    if !captureHistory.recentCaptures.isEmpty {
+                    // Recent Captures (if there are captures OR a pending failure to show)
+                    if !captureHistory.recentCaptures.isEmpty || processingState.hasPendingFailure {
                         recentCapturesSection
+                            .id(timeRefreshTrigger) // Force refresh when timer fires
                     }
                     
                     // Footer link
@@ -55,6 +61,14 @@ struct HomeView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 32)
             }
+        }
+        .onReceive(refreshTimer) { _ in
+            // Update trigger to refresh "captured ago" times
+            timeRefreshTrigger = Date()
+        }
+        .onAppear {
+            // Check if we were processing but never got success
+            processingState.checkForFailure()
         }
         .preferredColorScheme(.light)
         .sheet(isPresented: $showManageSheet) {
@@ -148,6 +162,10 @@ struct HomeView: View {
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08), lineWidth: 1))
             .padding(.horizontal, 20)
         }
+        .onAppear {
+            // Mark that we showed processing - if success never comes, it's a failure
+            processingState.markProcessingShown()
+        }
     }
     
     // MARK: - Setup Section (inline)
@@ -210,6 +228,17 @@ struct HomeView: View {
                 .padding(.horizontal, 20)
             
             VStack(spacing: 0) {
+                // Show failed capture row at top if there's a pending failure
+                if processingState.hasPendingFailure {
+                    FailedCaptureRow(onDismiss: {
+                        processingState.clearFailure()
+                    })
+                    
+                    if !captureHistory.recentCaptures.isEmpty {
+                        Divider().padding(.leading, 56)
+                    }
+                }
+                
                 ForEach(Array(captureHistory.recentCaptures.enumerated()), id: \.element.id) { index, capture in
                     CaptureRow(capture: capture)
                     
@@ -371,6 +400,47 @@ struct SetupSheet: View {
         }
         .presentationDetents([.medium])
         .preferredColorScheme(.light)
+    }
+}
+
+// MARK: - Failed Capture Row
+private struct FailedCaptureRow: View {
+    let onDismiss: () -> Void
+    
+    var body: some View {
+        HStack(spacing: 14) {
+            // Warning icon
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(Color.orange, in: RoundedRectangle(cornerRadius: 8))
+            
+            // Message
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Capture failed")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                
+                Text("Please try again")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
+            
+            Spacer()
+            
+            // Dismiss button
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.orange.opacity(0.05))
     }
 }
 

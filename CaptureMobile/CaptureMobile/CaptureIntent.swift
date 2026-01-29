@@ -82,7 +82,7 @@ struct CaptureScreenshotIntent: AppIntent {
         // Send immediate notification
         sendNotification(
             title: "Analyzing Screenshot...",
-            body: "You'll get a notification when done"
+            body: "Keep the app in the background."
         )
         
         // Start background upload - this survives even after the shortcut terminates!

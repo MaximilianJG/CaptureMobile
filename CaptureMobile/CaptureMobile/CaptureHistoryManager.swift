@@ -11,46 +11,76 @@ import Combine
 // MARK: - Processing State
 
 /// Tracks whether a capture is currently being processed
-/// Used to show "Analyzing..." placeholder in the UI
+/// Simple logic: if we showed "Analyzing..." but never got a success, it failed
 final class CaptureProcessingState: ObservableObject {
     static let shared = CaptureProcessingState()
     
     @Published var isProcessing: Bool = false
-    @Published var startedAt: Date?
+    @Published var hasPendingFailure: Bool = false
+    
+    private let processingShownKey = "capture_processing_shown_at"
+    private let failureKey = "capture_has_failure"
     
     private init() {
-        // Check if we were processing when app was killed
-        // (processing state is stored in UserDefaults for persistence)
-        let wasProcessing = UserDefaults.standard.bool(forKey: "capture_is_processing")
-        if wasProcessing {
-            // Check if it's been more than 2 minutes (probably failed/stuck)
-            if let startTime = UserDefaults.standard.object(forKey: "capture_processing_start") as? Date,
-               Date().timeIntervalSince(startTime) > 120 {
-                // Clear stale processing state
-                stopProcessing()
-            } else {
-                isProcessing = true
-                startedAt = UserDefaults.standard.object(forKey: "capture_processing_start") as? Date
+        // Check for persisted failure state
+        if UserDefaults.standard.bool(forKey: failureKey) {
+            hasPendingFailure = true
+        }
+    }
+    
+    /// Called when we START showing the "Analyzing..." UI
+    func markProcessingShown() {
+        UserDefaults.standard.set(Date(), forKey: processingShownKey)
+    }
+    
+    /// Called when a capture is successfully created
+    func markSuccess() {
+        UserDefaults.standard.removeObject(forKey: processingShownKey)
+        DispatchQueue.main.async {
+            self.isProcessing = false
+            self.hasPendingFailure = false
+        }
+        UserDefaults.standard.set(false, forKey: failureKey)
+    }
+    
+    /// Check if we were processing but never got success (called on app appear)
+    func checkForFailure() {
+        if let shownAt = UserDefaults.standard.object(forKey: processingShownKey) as? Date {
+            // We showed "Analyzing..." but never got success
+            // If it's been more than 10 seconds, consider it failed
+            if Date().timeIntervalSince(shownAt) > 10 {
+                DispatchQueue.main.async {
+                    self.hasPendingFailure = true
+                    self.isProcessing = false
+                }
+                UserDefaults.standard.set(true, forKey: failureKey)
+                UserDefaults.standard.removeObject(forKey: processingShownKey)
             }
         }
     }
     
+    /// Show the processing spinner
     func startProcessing() {
         DispatchQueue.main.async {
             self.isProcessing = true
-            self.startedAt = Date()
-            UserDefaults.standard.set(true, forKey: "capture_is_processing")
-            UserDefaults.standard.set(Date(), forKey: "capture_processing_start")
+            self.hasPendingFailure = false
         }
     }
     
+    /// Hide the processing spinner
     func stopProcessing() {
         DispatchQueue.main.async {
             self.isProcessing = false
-            self.startedAt = nil
-            UserDefaults.standard.set(false, forKey: "capture_is_processing")
-            UserDefaults.standard.removeObject(forKey: "capture_processing_start")
         }
+    }
+    
+    /// Clear the failure card (user dismissed it)
+    func clearFailure() {
+        DispatchQueue.main.async {
+            self.hasPendingFailure = false
+        }
+        UserDefaults.standard.set(false, forKey: failureKey)
+        UserDefaults.standard.removeObject(forKey: processingShownKey)
     }
 }
 
