@@ -59,13 +59,23 @@ final class APIService {
     // MARK: - Response Models
     struct AnalyzeResponse: Codable {
         let success: Bool
-        let eventCreated: EventDetails?
+        let eventsCreated: [EventDetails]
         let message: String
         
         enum CodingKeys: String, CodingKey {
             case success
-            case eventCreated = "event_created"
+            case eventsCreated = "events_created"
             case message
+        }
+        
+        /// Convenience property for single event (backward compatibility)
+        var eventCreated: EventDetails? {
+            return eventsCreated.first
+        }
+        
+        /// Number of events created
+        var eventCount: Int {
+            return eventsCreated.count
         }
     }
     
@@ -187,10 +197,14 @@ final class APIService {
         }
         
         // Track success or failure
-        if analyzeResponse.success, let event = analyzeResponse.eventCreated {
-            PostHogSDK.shared.capture("event_created_success", properties: [
-                "event_title": event.title
-            ])
+        if analyzeResponse.success && !analyzeResponse.eventsCreated.isEmpty {
+            // Track each created event
+            for event in analyzeResponse.eventsCreated {
+                PostHogSDK.shared.capture("event_created_success", properties: [
+                    "event_title": event.title,
+                    "event_count": analyzeResponse.eventCount
+                ])
+            }
         } else {
             PostHogSDK.shared.capture("event_created_failed", properties: [
                 "error": analyzeResponse.message
@@ -228,21 +242,53 @@ final class APIService {
 // MARK: - Debug Extension
 #if DEBUG
 extension APIService {
-    /// Mock response for testing without backend
+    /// Mock response for testing without backend (single event)
     func mockAnalyzeScreenshot() -> AnalyzeResponse {
         return AnalyzeResponse(
             success: true,
-            eventCreated: EventDetails(
-                id: "mock-event-123",
-                title: "Team Meeting",
-                startTime: "2026-01-20T10:00:00",
-                endTime: "2026-01-20T11:00:00",
-                location: "Conference Room A",
-                description: "Weekly team sync",
-                calendarLink: "https://calendar.google.com/event?eid=mock123",
-                sourceApp: "WhatsApp"
-            ),
+            eventsCreated: [
+                EventDetails(
+                    id: "mock-event-123",
+                    title: "Team Meeting",
+                    startTime: "2026-01-20T10:00:00",
+                    endTime: "2026-01-20T11:00:00",
+                    location: "Conference Room A",
+                    description: "Weekly team sync",
+                    calendarLink: "https://calendar.google.com/event?eid=mock123",
+                    sourceApp: "WhatsApp"
+                )
+            ],
             message: "Event created successfully!"
+        )
+    }
+    
+    /// Mock response for testing multiple events
+    func mockAnalyzeScreenshotMultiple() -> AnalyzeResponse {
+        return AnalyzeResponse(
+            success: true,
+            eventsCreated: [
+                EventDetails(
+                    id: "mock-event-123",
+                    title: "Team Meeting",
+                    startTime: "2026-01-20T10:00:00",
+                    endTime: "2026-01-20T11:00:00",
+                    location: "Conference Room A",
+                    description: "Weekly team sync",
+                    calendarLink: "https://calendar.google.com/event?eid=mock123",
+                    sourceApp: "WhatsApp"
+                ),
+                EventDetails(
+                    id: "mock-event-456",
+                    title: "Lunch with Sarah",
+                    startTime: "2026-01-20T12:30:00",
+                    endTime: "2026-01-20T13:30:00",
+                    location: "Cafe Berlin",
+                    description: "Catch up over lunch",
+                    calendarLink: "https://calendar.google.com/event?eid=mock456",
+                    sourceApp: "iMessage"
+                )
+            ],
+            message: "Successfully created 2 events!"
         )
     }
 }

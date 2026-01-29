@@ -9,7 +9,7 @@ import os
 from datetime import datetime, date
 from contextlib import asynccontextmanager
 from collections import defaultdict
-from typing import Dict
+from typing import Dict, List
 
 from fastapi import FastAPI, HTTPException, status, Request, Depends
 from fastapi.responses import JSONResponse
@@ -195,21 +195,21 @@ async def analyze_screenshot(
     _: None = Depends(verify_api_key),
 ):
     """
-    Analyze a screenshot for event information and create a calendar event.
+    Analyze a screenshot for event information and create calendar events.
     
-    This endpoint:
+    This endpoint supports MULTIPLE events per screenshot:
     1. Verifies API key (X-API-Key header)
     2. Checks rate limits (per-minute and daily)
     3. Validates the Google OAuth token
     4. Sends the image to OpenAI Vision for analysis
-    5. Extracts event details (title, date, time, location)
-    6. Creates an event in the user's Google Calendar
+    5. Extracts ALL event details (title, date, time, location) - supports multiple events
+    6. Creates events in the user's Google Calendar for each detected event
     
     Args:
         body: Contains base64 encoded image and Google OAuth access token
         
     Returns:
-        Success status, created event details, and status message
+        Success status, list of created events, and status message
     """
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     print(f"\n{'='*50}")
@@ -233,7 +233,7 @@ async def analyze_screenshot(
         user_email = user_info.get('email', 'unknown')
         print(f"[{timestamp}] ✅ AUTH OK: {user_email}")
         
-        # Step 1.5: Check daily limits
+        # Step 1.5: Check daily limits (per-request, not per-event)
         allowed, error_msg = daily_tracker.check_and_increment(user_email)
         if not allowed:
             stats = daily_tracker.get_stats()
@@ -245,79 +245,100 @@ async def analyze_screenshot(
                 detail=error_msg
             )
         
-        # Step 2: Analyze screenshot with OpenAI Vision
+        # Step 2: Analyze screenshot with OpenAI Vision (supports multiple events)
         print(f"[{timestamp}] 🤖 Analyzing screenshot with AI...")
         analysis_result = await openai_service.analyze_screenshot(body.image)
         
-        if not analysis_result.found_event:
-            print(f"[{timestamp}] ⚠️  NO EVENT FOUND in screenshot")
+        if not analysis_result.found_events or len(analysis_result.events) == 0:
+            print(f"[{timestamp}] ⚠️  NO EVENTS FOUND in screenshot")
             print(f"[{timestamp}] 📝 Raw text: {analysis_result.raw_text[:200] if analysis_result.raw_text else 'None'}...")
             print(f"{'='*50}\n")
             return AnalyzeScreenshotResponse(
                 success=False,
-                event_created=None,
+                events_created=[],
                 message="No event information found in the screenshot. Please try a clearer image."
             )
         
-        event_info = analysis_result.event_info
-        source_app = getattr(event_info, 'source_app', None)
-        print(f"[{timestamp}] ✅ EVENT DETECTED:")
-        print(f"    📌 Title: {event_info.title or 'Untitled'}")
-        print(f"    📅 Date: {event_info.date or 'Unknown'}")
-        print(f"    🕐 Time: {event_info.start_time or 'All day'} - {event_info.end_time or 'N/A'}")
-        print(f"    📍 Location: {event_info.location or 'None'}")
-        print(f"    👤 Attendee: {getattr(event_info, 'attendee_name', None) or 'None'}")
-        print(f"    📱 SOURCE APP: {source_app or 'NOT DETECTED'}")
-        print(f"    🎯 Confidence: {(event_info.confidence or 0.5):.0%}")
+        print(f"[{timestamp}] ✅ {analysis_result.event_count} EVENT(S) DETECTED:")
+        
+        # Step 3: Create calendar events for each detected event
+        created_events: List[EventDetails] = []
+        failed_count = 0
+        
+        for idx, event_info in enumerate(analysis_result.events, 1):
+            source_app = getattr(event_info, 'source_app', None)
+            print(f"[{timestamp}] 📌 Event {idx}/{analysis_result.event_count}:")
+            print(f"        Title: {event_info.title or 'Untitled'}")
+            print(f"        📅 Date: {event_info.date or 'Unknown'}")
+            print(f"        🕐 Time: {event_info.start_time or 'All day'} - {event_info.end_time or 'N/A'}")
+            print(f"        📍 Location: {event_info.location or 'None'}")
+            print(f"        👤 Attendee: {getattr(event_info, 'attendee_name', None) or 'None'}")
+            print(f"        📱 SOURCE APP: {source_app or 'NOT DETECTED'}")
+            print(f"        🎯 Confidence: {(event_info.confidence or 0.5):.0%}")
+            
+            # Create calendar event
+            print(f"[{timestamp}] 📅 Creating calendar event {idx}...")
+            created_event = await calendar_service.create_event(
+                access_token=body.access_token,
+                event_info=event_info
+            )
+            
+            if not created_event:
+                print(f"[{timestamp}] ❌ CALENDAR ERROR: Failed to create event {idx}")
+                failed_count += 1
+                continue
+            
+            # Build start_time string
+            start_time_str = event_info.date
+            if event_info.start_time:
+                start_time_str += "T" + event_info.start_time
+            
+            # Build end_time string (can be None)
+            end_time_str = None
+            if event_info.end_time:
+                end_time_str = event_info.date + "T" + event_info.end_time
+            
+            event_details = EventDetails(
+                id=created_event.get("id"),
+                title=event_info.title,
+                start_time=start_time_str,
+                end_time=end_time_str,
+                location=event_info.location,
+                description=event_info.description,
+                calendar_link=created_event.get("htmlLink"),
+                source_app=event_info.source_app
+            )
+            created_events.append(event_details)
+            print(f"[{timestamp}] ✅ Event {idx} created: {created_event.get('htmlLink')}")
+        
         if analysis_result.raw_text:
-            print(f"    📝 Raw text: {analysis_result.raw_text[:150]}...")
+            print(f"[{timestamp}] 📝 Raw text: {analysis_result.raw_text[:150]}...")
         
-        # Step 3: Create calendar event
-        print(f"[{timestamp}] 📅 Creating calendar event...")
-        created_event = await calendar_service.create_event(
-            access_token=body.access_token,
-            event_info=event_info
-        )
-        
-        if not created_event:
-            print(f"[{timestamp}] ❌ CALENDAR ERROR: Failed to create event")
+        # Step 4: Return response
+        if len(created_events) == 0:
+            print(f"[{timestamp}] ❌ CALENDAR ERROR: Failed to create any events")
             print(f"{'='*50}\n")
             return AnalyzeScreenshotResponse(
                 success=False,
-                event_created=None,
-                message="Event detected but failed to create in Google Calendar."
+                events_created=[],
+                message=f"Detected {analysis_result.event_count} event(s) but failed to create any in Google Calendar."
             )
         
-        # Step 4: Return success response
-        # Build start_time string
-        start_time_str = event_info.date
-        if event_info.start_time:
-            start_time_str += "T" + event_info.start_time
+        # Build success message
+        if len(created_events) == 1:
+            message = f"Event '{created_events[0].title}' created successfully!"
+        elif failed_count == 0:
+            message = f"Successfully created {len(created_events)} events!"
+        else:
+            message = f"Created {len(created_events)} of {analysis_result.event_count} events ({failed_count} failed)."
         
-        # Build end_time string (can be None)
-        end_time_str = None
-        if event_info.end_time:
-            end_time_str = event_info.date + "T" + event_info.end_time
-        
-        event_details = EventDetails(
-            id=created_event.get("id"),
-            title=event_info.title,
-            start_time=start_time_str,
-            end_time=end_time_str,
-            location=event_info.location,
-            description=event_info.description,
-            calendar_link=created_event.get("htmlLink"),
-            source_app=event_info.source_app
-        )
-        
-        print(f"[{timestamp}] ✅ SUCCESS: Event created!")
-        print(f"    🔗 Link: {created_event.get('htmlLink')}")
+        print(f"[{timestamp}] ✅ SUCCESS: {message}")
         print(f"{'='*50}\n")
         
         return AnalyzeScreenshotResponse(
             success=True,
-            event_created=event_details,
-            message=f"Event '{event_info.title}' created successfully!"
+            events_created=created_events,
+            message=message
         )
         
     except HTTPException:

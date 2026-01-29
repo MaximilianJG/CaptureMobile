@@ -73,22 +73,43 @@ struct CaptureScreenshotIntent: AppIntent {
         do {
             let response = try await APIService.shared.analyzeScreenshot(image)
             
-            if response.success, let event = response.eventCreated {
-                // Save to capture history
-                CaptureHistoryManager.shared.addCapture(event)
+            if response.success && !response.eventsCreated.isEmpty {
+                // Save all events to capture history
+                for event in response.eventsCreated {
+                    CaptureHistoryManager.shared.addCapture(event)
+                }
                 
-                // Send success notification
-                sendNotification(
-                    title: "Event Created",
-                    body: "\(event.title)\n\(formatEventTime(event))"
-                )
-                
-                PostHogSDK.shared.capture("shortcut_completed", properties: [
-                    "success": true,
-                    "event_title": event.title
-                ])
-                PostHogSDK.shared.flush()
-                return .result(value: "✅ Created: \(event.title)")
+                // Build notification and result based on event count
+                let eventCount = response.eventsCreated.count
+                if eventCount == 1, let event = response.eventsCreated.first {
+                    // Single event
+                    sendNotification(
+                        title: "Event Created",
+                        body: "\(event.title)\n\(formatEventTime(event))"
+                    )
+                    
+                    PostHogSDK.shared.capture("shortcut_completed", properties: [
+                        "success": true,
+                        "event_title": event.title,
+                        "event_count": 1
+                    ])
+                    PostHogSDK.shared.flush()
+                    return .result(value: "✅ Created: \(event.title)")
+                } else {
+                    // Multiple events
+                    let eventTitles = response.eventsCreated.map { $0.title }.joined(separator: ", ")
+                    sendNotification(
+                        title: "\(eventCount) Events Created",
+                        body: eventTitles
+                    )
+                    
+                    PostHogSDK.shared.capture("shortcut_completed", properties: [
+                        "success": true,
+                        "event_count": eventCount
+                    ])
+                    PostHogSDK.shared.flush()
+                    return .result(value: "✅ Created \(eventCount) events")
+                }
             } else {
                 // Check if it's "no event found" or "calendar creation failed"
                 let isNoEventFound = response.message.lowercased().contains("no event") || 

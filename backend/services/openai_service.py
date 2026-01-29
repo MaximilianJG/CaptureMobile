@@ -8,7 +8,7 @@ import os
 import json
 import base64
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from openai import AsyncOpenAI
 
@@ -53,7 +53,7 @@ class OpenAIService:
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Analyze this screenshot thoroughly. Examine the ENTIRE image for context - who is involved (sender names, profiles), what the event is about (subject, purpose), and any relevant details. Extract event information and include meaningful context in the title and description. Respond with the JSON format specified."
+                                "text": "Analyze this screenshot thoroughly. Look for ALL calendar-worthy events - there may be multiple events in a single screenshot. Examine the ENTIRE image for context - who is involved (sender names, profiles), what each event is about (subject, purpose), and any relevant details. Extract ALL event information and include meaningful context in the title and description of each. Respond with the JSON format specified."
                             },
                             {
                                 "type": "image_url",
@@ -65,7 +65,7 @@ class OpenAIService:
                         ]
                     }
                 ],
-                max_tokens=1000,
+                max_tokens=2000,  # Increased for multiple events
                 response_format={"type": "json_object"}
             )
             
@@ -79,8 +79,9 @@ class OpenAIService:
             print(f"OpenAI analysis error: {str(e)}")
             # Return empty result on error
             return OpenAIAnalysisResult(
-                found_event=False,
-                event_info=None,
+                found_events=False,
+                event_count=0,
+                events=[],
                 raw_text=f"Analysis failed: {str(e)}"
             )
     
@@ -208,6 +209,17 @@ DO NOT include:
 - Unrelated messages in the screenshot
 - Personal information beyond what's needed for the event
 
+=== MULTIPLE EVENTS ===
+Screenshots may contain MULTIPLE calendar-worthy items. Look for ALL of them:
+- A list of upcoming appointments or meetings
+- Multiple messages about different events in a chat
+- Calendar views showing several events
+- Emails or messages with multiple dates mentioned
+- To-do lists with multiple deadlines
+- Event listings or schedules
+
+Return ALL events found as separate items in the events array, not just the first one.
+
 === OUTPUT FORMAT ===
 - Times in 24-hour format (HH:MM)
 - Dates in YYYY-MM-DD format
@@ -215,77 +227,82 @@ DO NOT include:
 
 Respond ONLY with JSON:
 {{
-    "found_event": true/false,
-    "event_info": {{
-        "title": "Descriptive Event Title (include person/purpose)",
-        "date": "YYYY-MM-DD",
-        "start_time": "HH:MM" or null,
-        "end_time": "HH:MM" or null,
-        "location": "Location" or null,
-        "description": "Relevant context: who organized, purpose, source app" or null,
-        "timezone": "Europe/Berlin",
-        "is_all_day": true/false,
-        "is_deadline": true/false,
-        "confidence": 0.0-1.0,
-        "attendee_name": "Name of the other person involved" or null,
-        "source_app": "WhatsApp/Instagram/Gmail/etc" or null
-    }},
+    "found_events": true/false,
+    "event_count": N,
+    "events": [
+        {{
+            "title": "Descriptive Event Title (include person/purpose)",
+            "date": "YYYY-MM-DD",
+            "start_time": "HH:MM" or null,
+            "end_time": "HH:MM" or null,
+            "location": "Location" or null,
+            "description": "Relevant context: who organized, purpose, source app" or null,
+            "timezone": "Europe/Berlin",
+            "is_all_day": true/false,
+            "is_deadline": true/false,
+            "confidence": 0.0-1.0,
+            "attendee_name": "Name of the other person involved" or null,
+            "source_app": "WhatsApp/Instagram/Gmail/etc" or null
+        }}
+    ],
     "raw_text": "Relevant text from the image"
 }}
 
-If nothing calendar-worthy is found, set found_event to false and event_info to null.
+If nothing calendar-worthy is found, set found_events to false and events to an empty array [].
+If ONE event is found, event_count should be 1 and events should contain one item.
+If MULTIPLE events are found, event_count should match the array length.
 
 Be thorough - if there's a date and time mentioned, it probably belongs on a calendar!"""
     
     def _parse_response(self, result: dict) -> OpenAIAnalysisResult:
-        """Parse the OpenAI response into our schema."""
-        found_event = result.get("found_event", False)
-        event_info_data = result.get("event_info")
+        """Parse the OpenAI response into our schema - supports multiple events."""
+        found_events = result.get("found_events", False)
+        events_data = result.get("events", [])
         raw_text = result.get("raw_text")
         
-        event_info = None
-        if found_event and event_info_data:
-            # Date is required - if missing, we can't create an event
-            date = event_info_data.get("date")
-            if not date:
-                print("⚠️ No date found in event info - cannot create event")
-                return OpenAIAnalysisResult(
-                    found_event=False,
-                    event_info=None,
-                    raw_text=raw_text
-                )
-            
-            # Title fallback
-            title = event_info_data.get("title") or "Event"
-            
-            # Smart is_all_day: if no start_time provided, treat as all-day
-            start_time = event_info_data.get("start_time")
-            is_all_day = event_info_data.get("is_all_day", False)
-            if not start_time and not is_all_day:
-                is_all_day = True
-            
-            try:
-                event_info = ExtractedEventInfo(
-                    title=title,
-                    date=date,
-                    start_time=start_time,
-                    end_time=event_info_data.get("end_time"),
-                    location=event_info_data.get("location"),
-                    description=event_info_data.get("description"),
-                    timezone=event_info_data.get("timezone", "Europe/Berlin"),
-                    is_all_day=is_all_day,
-                    is_deadline=event_info_data.get("is_deadline", False),
-                    confidence=event_info_data.get("confidence", 0.5),
-                    attendee_name=event_info_data.get("attendee_name"),
-                    source_app=event_info_data.get("source_app"),
-                )
-            except Exception as e:
-                print(f"Failed to parse event info: {e}")
-                found_event = False
+        parsed_events: List[ExtractedEventInfo] = []
+        
+        if found_events and events_data:
+            for event_info_data in events_data:
+                # Date is required - if missing, skip this event
+                date = event_info_data.get("date")
+                if not date:
+                    print("⚠️ No date found in event info - skipping event")
+                    continue
+                
+                # Title fallback
+                title = event_info_data.get("title") or "Event"
+                
+                # Smart is_all_day: if no start_time provided, treat as all-day
+                start_time = event_info_data.get("start_time")
+                is_all_day = event_info_data.get("is_all_day", False)
+                if not start_time and not is_all_day:
+                    is_all_day = True
+                
+                try:
+                    event_info = ExtractedEventInfo(
+                        title=title,
+                        date=date,
+                        start_time=start_time,
+                        end_time=event_info_data.get("end_time"),
+                        location=event_info_data.get("location"),
+                        description=event_info_data.get("description"),
+                        timezone=event_info_data.get("timezone", "Europe/Berlin"),
+                        is_all_day=is_all_day,
+                        is_deadline=event_info_data.get("is_deadline", False),
+                        confidence=event_info_data.get("confidence", 0.5),
+                        attendee_name=event_info_data.get("attendee_name"),
+                        source_app=event_info_data.get("source_app"),
+                    )
+                    parsed_events.append(event_info)
+                except Exception as e:
+                    print(f"Failed to parse event info: {e}")
+                    continue
         
         return OpenAIAnalysisResult(
-            found_event=found_event,
-            event_info=event_info,
+            found_events=len(parsed_events) > 0,
+            event_count=len(parsed_events),
+            events=parsed_events,
             raw_text=raw_text
         )
     

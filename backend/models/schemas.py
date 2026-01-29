@@ -3,7 +3,7 @@ Pydantic schemas for request/response validation.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -36,7 +36,7 @@ class EventDetails(BaseModel):
 class AnalyzeScreenshotResponse(BaseModel):
     """Response from screenshot analysis endpoint."""
     success: bool = Field(..., description="Whether the operation was successful")
-    event_created: Optional[EventDetails] = Field(None, description="Details of the created event")
+    events_created: List[EventDetails] = Field(default_factory=list, description="List of created events")
     message: str = Field(..., description="Status message")
 
 
@@ -67,7 +67,8 @@ class ExtractedEventInfo(BaseModel):
 
 
 class OpenAIAnalysisResult(BaseModel):
-    """Result from OpenAI screenshot analysis."""
-    found_event: bool = Field(..., description="Whether an event was found in the image")
-    event_info: Optional[ExtractedEventInfo] = Field(None, description="Extracted event information")
+    """Result from OpenAI screenshot analysis - supports multiple events."""
+    found_events: bool = Field(..., description="Whether any events were found in the image")
+    event_count: int = Field(default=0, description="Number of events detected")
+    events: List[ExtractedEventInfo] = Field(default_factory=list, description="List of extracted event information")
     raw_text: Optional[str] = Field(None, description="Any relevant text extracted from image")
