@@ -79,14 +79,24 @@ struct CaptureScreenshotIntent: AppIntent {
             return .result(value: "❌ No calendar access. Please open Capture app and grant calendar permission.")
         }
         
+        // Send immediate notification so user knows it's working
+        sendNotification(
+            title: "Analyzing Screenshot...",
+            body: "You'll get a notification when Capture is done"
+        )
+        
+        // Set processing state (for in-app UI)
+        CaptureProcessingState.shared.startProcessing()
+        
         // Process in background to avoid Shortcut timeout
-        // Return immediately and send notification when done
-        Task.detached {
-            await processScreenshot(image)
+        // Use Task (not detached) to keep it alive longer
+        let imageCopy = image
+        Task {
+            await self.processScreenshotInBackground(imageCopy)
         }
         
         PostHogSDK.shared.flush()
-        return .result(value: "📸 Processing screenshot...")
+        return .result(value: "📸 Analyzing... check notifications for result")
     }
     
     // Open the app when there's an error (optional)
@@ -94,7 +104,7 @@ struct CaptureScreenshotIntent: AppIntent {
     
     // MARK: - Background Processing
     
-    private func processScreenshot(_ image: UIImage) async {
+    private func processScreenshotInBackground(_ image: UIImage) async {
         do {
             let result = try await APIService.shared.analyzeAndCreateEvents(image)
             
@@ -167,6 +177,11 @@ struct CaptureScreenshotIntent: AppIntent {
                 "success": false,
                 "error": error.localizedDescription
             ])
+        }
+        
+        // Clear processing state
+        await MainActor.run {
+            CaptureProcessingState.shared.stopProcessing()
         }
         
         PostHogSDK.shared.flush()

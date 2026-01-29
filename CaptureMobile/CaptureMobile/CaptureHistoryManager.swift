@@ -8,6 +8,54 @@
 import Foundation
 import Combine
 
+// MARK: - Processing State
+
+/// Tracks whether a capture is currently being processed
+/// Used to show "Analyzing..." placeholder in the UI
+final class CaptureProcessingState: ObservableObject {
+    static let shared = CaptureProcessingState()
+    
+    @Published var isProcessing: Bool = false
+    @Published var startedAt: Date?
+    
+    private init() {
+        // Check if we were processing when app was killed
+        // (processing state is stored in UserDefaults for persistence)
+        let wasProcessing = UserDefaults.standard.bool(forKey: "capture_is_processing")
+        if wasProcessing {
+            // Check if it's been more than 2 minutes (probably failed/stuck)
+            if let startTime = UserDefaults.standard.object(forKey: "capture_processing_start") as? Date,
+               Date().timeIntervalSince(startTime) > 120 {
+                // Clear stale processing state
+                stopProcessing()
+            } else {
+                isProcessing = true
+                startedAt = UserDefaults.standard.object(forKey: "capture_processing_start") as? Date
+            }
+        }
+    }
+    
+    func startProcessing() {
+        DispatchQueue.main.async {
+            self.isProcessing = true
+            self.startedAt = Date()
+            UserDefaults.standard.set(true, forKey: "capture_is_processing")
+            UserDefaults.standard.set(Date(), forKey: "capture_processing_start")
+        }
+    }
+    
+    func stopProcessing() {
+        DispatchQueue.main.async {
+            self.isProcessing = false
+            self.startedAt = nil
+            UserDefaults.standard.set(false, forKey: "capture_is_processing")
+            UserDefaults.standard.removeObject(forKey: "capture_processing_start")
+        }
+    }
+}
+
+// MARK: - Captured Event
+
 /// Represents a captured event stored in local history
 struct CapturedEvent: Codable, Identifiable {
     let id: String
@@ -203,6 +251,28 @@ extension CapturedEvent {
         }
         
         return displayFormatter.string(from: parsedDate)
+    }
+    
+    /// Returns a short relative time string for when it was captured
+    var capturedAgo: String {
+        let now = Date()
+        let seconds = now.timeIntervalSince(capturedAt)
+        
+        if seconds < 60 {
+            return "Just now"
+        } else if seconds < 3600 {
+            let minutes = Int(seconds / 60)
+            return "\(minutes)m ago"
+        } else if seconds < 86400 {
+            let hours = Int(seconds / 3600)
+            return "\(hours)h ago"
+        } else if seconds < 604800 {
+            let days = Int(seconds / 86400)
+            return "\(days)d ago"
+        } else {
+            let weeks = Int(seconds / 604800)
+            return "\(weeks)w ago"
+        }
     }
     
     /// Returns an SF Symbol name for the source app

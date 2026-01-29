@@ -171,6 +171,7 @@ final class APIService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 120 // 2 minutes for complex screenshots with many events
         
         let body: [String: Any] = [
             "image": base64Image,

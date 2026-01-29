@@ -140,12 +140,23 @@ final class CalendarService: ObservableObject {
             throw CalendarError.noAccess
         }
         
-        guard let calendar = selectedCalendar else {
+        // Ensure calendars are loaded (important for extension context)
+        if calendars.isEmpty {
+            loadCalendars()
+        }
+        
+        // Try to get selected calendar, or fall back to default
+        var calendar = selectedCalendar
+        if calendar == nil {
+            calendar = eventStore.defaultCalendarForNewEvents
+        }
+        
+        guard let targetCalendar = calendar else {
             throw CalendarError.noCalendarSelected
         }
         
         let event = EKEvent(eventStore: eventStore)
-        event.calendar = calendar
+        event.calendar = targetCalendar
         event.title = eventData.title
         event.location = eventData.location
         

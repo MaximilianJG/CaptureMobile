@@ -59,7 +59,7 @@ class OpenAIService:
                                 "type": "image_url",
                                 "image_url": {
                                     "url": base64_image,
-                                    "detail": "high"
+                                    "detail": "auto"  # auto is faster, high only needed for tiny text
                                 }
                             }
                         ]

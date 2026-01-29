@@ -13,6 +13,7 @@ struct HomeView: View {
     @ObservedObject var authManager = AppleAuthManager.shared
     @ObservedObject var captureHistory = CaptureHistoryManager.shared
     @ObservedObject var calendarService = CalendarService.shared
+    @ObservedObject var processingState = CaptureProcessingState.shared
     @State private var showManageSheet = false
     @State private var showSetupPopup = false
     @State private var showCalendarPermissionAlert = false
@@ -33,8 +34,13 @@ struct HomeView: View {
                     // Calendar Selection
                     calendarSection
                     
-                    // Setup section (only if no captures yet)
-                    if captureHistory.recentCaptures.isEmpty {
+                    // Processing indicator (when analyzing a screenshot)
+                    if processingState.isProcessing {
+                        processingSection
+                    }
+                    
+                    // Setup section (only if no captures yet and not processing)
+                    if captureHistory.recentCaptures.isEmpty && !processingState.isProcessing {
                         setupSection
                     }
                     
@@ -102,6 +108,46 @@ struct HomeView: View {
     // MARK: - Calendar Section
     private var calendarSection: some View {
         CalendarPickerView()
+    }
+    
+    // MARK: - Processing Section
+    private var processingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Processing")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 20)
+            
+            HStack(spacing: 14) {
+                // Animated icon
+                ZStack {
+                    Circle()
+                        .fill(Color.black.opacity(0.1))
+                        .frame(width: 32, height: 32)
+                    
+                    ProgressView()
+                        .scaleEffect(0.8)
+                }
+                
+                // Processing text
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Analyzing Screenshot...")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    
+                    Text("Creating your calendar events")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+                
+                Spacer()
+            }
+            .padding(16)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08), lineWidth: 1))
+            .padding(.horizontal, 20)
+        }
     }
     
     // MARK: - Setup Section (inline)
@@ -366,6 +412,11 @@ private struct CaptureRow: View {
                 }
                 
                 Spacer()
+                
+                // Captured time ago
+                Text(capture.capturedAgo)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
                 
                 // Chevron to indicate tappable
                 Image(systemName: "chevron.right")
