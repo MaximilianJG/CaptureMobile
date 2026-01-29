@@ -59,8 +59,8 @@ struct CaptureScreenshotIntent: AppIntent {
             return .result(value: "❌ Failed to read screenshot")
         }
         
-        // Check if user is signed in
-        guard AppleAuthManager.shared.getUserID() != nil else {
+        // Check if user is signed in and get user ID
+        guard let userID = AppleAuthManager.shared.getUserID() else {
             PostHogSDK.shared.capture("shortcut_completed", properties: [
                 "success": false,
                 "error": "not_signed_in"
@@ -79,113 +79,35 @@ struct CaptureScreenshotIntent: AppIntent {
             return .result(value: "❌ No calendar access. Please open Capture app and grant calendar permission.")
         }
         
-        // Send immediate notification so user knows it's working
+        // Send immediate notification
         sendNotification(
             title: "Analyzing Screenshot...",
-            body: "You'll get a notification when Capture is done"
+            body: "You'll get a notification when done"
         )
         
-        // Set processing state (for in-app UI)
-        CaptureProcessingState.shared.startProcessing()
+        // Start background upload - this survives even after the shortcut terminates!
+        // iOS Background URLSession handles the network request independently
+        let success = BackgroundUploadManager.shared.uploadScreenshot(image, userID: userID)
         
-        // Process in background to avoid Shortcut timeout
-        // Use Task (not detached) to keep it alive longer
-        let imageCopy = image
-        Task {
-            await self.processScreenshotInBackground(imageCopy)
+        if !success {
+            PostHogSDK.shared.capture("shortcut_completed", properties: [
+                "success": false,
+                "error": "upload_start_failed"
+            ])
+            PostHogSDK.shared.flush()
+            return .result(value: "❌ Failed to start upload")
         }
         
+        PostHogSDK.shared.capture("shortcut_background_upload_initiated")
         PostHogSDK.shared.flush()
-        return .result(value: "📸 Analyzing... check notifications for result")
+        
+        // Return immediately - the background upload continues independently!
+        // User will get a notification when processing is complete
+        return .result(value: "📸 Processing in background...")
     }
     
     // Open the app when there's an error (optional)
     static var openAppWhenRun: Bool = false
-    
-    // MARK: - Background Processing
-    
-    private func processScreenshotInBackground(_ image: UIImage) async {
-        do {
-            let result = try await APIService.shared.analyzeAndCreateEvents(image)
-            
-            if result.eventsCreated > 0 {
-                if result.eventsCreated == 1 {
-                    sendNotification(
-                        title: "Event Created",
-                        body: result.firstEventTitle ?? "Event"
-                    )
-                    
-                    PostHogSDK.shared.capture("shortcut_completed", properties: [
-                        "success": true,
-                        "event_title": result.firstEventTitle ?? "Event",
-                        "event_count": 1
-                    ])
-                } else {
-                    sendNotification(
-                        title: "\(result.eventsCreated) Events Created",
-                        body: result.message
-                    )
-                    
-                    PostHogSDK.shared.capture("shortcut_completed", properties: [
-                        "success": true,
-                        "event_count": result.eventsCreated
-                    ])
-                }
-            } else {
-                sendNotification(
-                    title: "No Events Created",
-                    body: result.message
-                )
-                
-                PostHogSDK.shared.capture("shortcut_completed", properties: [
-                    "success": false,
-                    "error": result.message
-                ])
-            }
-        } catch let error as APIService.APIError {
-            let errorMessage: String
-            let notificationTitle: String
-            
-            switch error {
-            case .noEventFound:
-                notificationTitle = "No Event Found"
-                errorMessage = "Couldn't detect an event in your screenshot"
-            case .rateLimited(let message):
-                notificationTitle = "Rate Limited"
-                errorMessage = message
-            case .calendarError(let message):
-                notificationTitle = "Calendar Error"
-                errorMessage = message
-            default:
-                notificationTitle = "Capture Failed"
-                errorMessage = error.localizedDescription
-            }
-            
-            sendNotification(title: notificationTitle, body: errorMessage)
-            
-            PostHogSDK.shared.capture("shortcut_completed", properties: [
-                "success": false,
-                "error": errorMessage
-            ])
-        } catch {
-            sendNotification(
-                title: "Capture Failed",
-                body: error.localizedDescription
-            )
-            
-            PostHogSDK.shared.capture("shortcut_completed", properties: [
-                "success": false,
-                "error": error.localizedDescription
-            ])
-        }
-        
-        // Clear processing state
-        await MainActor.run {
-            CaptureProcessingState.shared.stopProcessing()
-        }
-        
-        PostHogSDK.shared.flush()
-    }
     
     // MARK: - Notification Helpers
     

@@ -13,6 +13,9 @@ import UserNotifications
 @main
 struct CaptureMobileApp: App {
     
+    // Use AppDelegate for background URL session handling
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    
     // Register App Shortcuts with the system
     init() {
         // Initialize PostHog Analytics
@@ -34,6 +37,28 @@ struct CaptureMobileApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+        }
+    }
+}
+
+// MARK: - AppDelegate for Background URL Session
+
+class AppDelegate: NSObject, UIApplicationDelegate {
+    
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        // Reconnect to any existing background sessions
+        BackgroundUploadManager.shared.reconnectBackgroundSession()
+        return true
+    }
+    
+    /// Called by iOS when a background URL session has events waiting
+    /// This is how iOS wakes up our app when the upload completes
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
+        if identifier == BackgroundUploadManager.sessionIdentifier {
+            // Store the completion handler - must be called when we're done processing
+            BackgroundUploadManager.shared.backgroundCompletionHandler = completionHandler
+            // Reconnect to the session to receive the pending events
+            BackgroundUploadManager.shared.reconnectBackgroundSession()
         }
     }
 }
