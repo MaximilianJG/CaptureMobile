@@ -7,6 +7,7 @@ Uses GPT-4 Vision to analyze screenshots and extract event information.
 import os
 import json
 import base64
+import time
 from datetime import datetime
 from typing import Optional, List
 
@@ -33,6 +34,8 @@ class OpenAIService:
             OpenAIAnalysisResult with extracted event info
         """
         try:
+            api_start = time.time()
+            
             # Ensure the base64 string has the proper prefix
             if not base64_image.startswith("data:"):
                 base64_image = f"data:image/jpeg;base64,{base64_image}"
@@ -41,6 +44,7 @@ class OpenAIService:
             system_prompt = self._get_system_prompt()
             
             # Call OpenAI Vision API
+            print(f"  [OpenAI] Calling {self.model} API...")
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -68,6 +72,12 @@ class OpenAIService:
                 max_tokens=2000,  # Increased for multiple events
                 response_format={"type": "json_object"}
             )
+            
+            api_elapsed = time.time() - api_start
+            
+            # Log token usage
+            usage = response.usage
+            print(f"  [OpenAI] API response in {api_elapsed:.1f}s | tokens: {usage.prompt_tokens} in, {usage.completion_tokens} out")
             
             # Parse the response
             result_text = response.choices[0].message.content
