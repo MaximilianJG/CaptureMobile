@@ -20,8 +20,16 @@ class APNsService:
     """Service for sending Apple Push Notifications."""
     
     def __init__(self):
-        self.client: Optional[Any] = None
+        self._client: Optional[Any] = None
+        self._initialized: bool = False
         self.bundle_id: str = ""
+    
+    def _ensure_initialized(self):
+        """Lazy initialization - only initialize when first needed."""
+        if self._initialized:
+            return
+        
+        self._initialized = True
         
         if not APNS_AVAILABLE:
             print("⚠️ APNs not available - aioapns package not installed")
@@ -35,16 +43,23 @@ class APNsService:
         self.bundle_id = os.getenv("APNS_BUNDLE_ID", "")
         use_sandbox = os.getenv("APNS_SANDBOX", "true").lower() == "true"
         
+        print(f"🔧 Initializing APNs service...")
+        print(f"   Key ID: {key_id}")
+        print(f"   Team ID: {team_id}")
+        print(f"   Bundle ID: {self.bundle_id}")
+        print(f"   Sandbox: {use_sandbox}")
+        print(f"   Key content length: {len(key_content) if key_content else 0}")
+        
         # Determine the key source
         key_source = None
         if key_path and os.path.exists(key_path):
             key_source = key_path
+            print(f"📝 Using APNs key from file: {key_path}")
         elif key_content:
             import base64
             try:
                 # Check if content is already the raw key (starts with -----BEGIN)
                 if key_content.strip().startswith("-----BEGIN"):
-                    # Raw key content provided directly
                     key_text = key_content.strip()
                     print(f"📝 APNs key provided as raw PEM content")
                 else:
@@ -52,46 +67,49 @@ class APNsService:
                     cleaned_content = key_content.replace('\n', '').replace('\r', '').replace(' ', '')
                     key_bytes = base64.b64decode(cleaned_content)
                     key_text = key_bytes.decode('utf-8')
-                    print(f"📝 APNs key decoded from base64")
+                    print(f"📝 APNs key decoded from base64 ({len(key_bytes)} bytes)")
                 
                 # Validate the key looks correct
                 if "-----BEGIN PRIVATE KEY-----" not in key_text:
                     print(f"❌ APNs key doesn't look like a valid .p8 file")
                     print(f"   Key starts with: {key_text[:50]}...")
-                else:
-                    # Normalize the key: ensure Unix line endings and proper formatting
-                    key_text = key_text.replace('\r\n', '\n').replace('\r', '\n')
-                    
-                    # Ensure it ends with a newline
-                    if not key_text.endswith('\n'):
-                        key_text += '\n'
-                    
-                    # Write to a permanent file in /tmp
-                    key_file_path = "/tmp/apns_auth_key.p8"
-                    with open(key_file_path, 'w', encoding='ascii', newline='\n') as f:
-                        f.write(key_text)
-                    
-                    # Set proper permissions
-                    os.chmod(key_file_path, 0o600)
-                    
-                    key_source = key_file_path
+                    return
+                
+                # Normalize the key: ensure Unix line endings and proper formatting
+                key_text = key_text.replace('\r\n', '\n').replace('\r', '\n')
+                
+                # Ensure it ends with a newline
+                if not key_text.endswith('\n'):
+                    key_text += '\n'
+                
+                # Write to a permanent file in /tmp
+                key_file_path = "/tmp/apns_auth_key.p8"
+                with open(key_file_path, 'w', encoding='ascii', newline='\n') as f:
+                    f.write(key_text)
+                
+                # Set proper permissions
+                os.chmod(key_file_path, 0o600)
+                
+                key_source = key_file_path
+                
+                # Verify the file content
+                with open(key_file_path, 'r') as f:
+                    content = f.read()
+                    lines = content.strip().split('\n')
                     print(f"✅ APNs key written to {key_file_path}")
+                    print(f"   File size: {len(content)} bytes, {len(lines)} lines")
+                    print(f"   First line: {lines[0]}")
+                    print(f"   Last line: {lines[-1]}")
                     
-                    # Verify the file content
-                    with open(key_file_path, 'r') as f:
-                        content = f.read()
-                        lines = content.strip().split('\n')
-                        print(f"✅ APNs key file verified ({len(content)} bytes, {len(lines)} lines)")
-                        print(f"   First line: {lines[0]}")
-                        print(f"   Last line: {lines[-1]}")
             except Exception as e:
                 print(f"❌ Failed to process APNS_KEY_CONTENT: {e}")
                 import traceback
                 traceback.print_exc()
+                return
         
         if key_source and key_id and team_id and self.bundle_id:
             try:
-                self.client = APNs(
+                self._client = APNs(
                     key=key_source,
                     key_id=key_id,
                     team_id=team_id,
@@ -99,10 +117,12 @@ class APNsService:
                     use_sandbox=use_sandbox
                 )
                 env_type = "sandbox" if use_sandbox else "production"
-                print(f"✅ APNs configured ({env_type}) for {self.bundle_id}")
+                print(f"✅ APNs client created ({env_type}) for {self.bundle_id}")
             except Exception as e:
-                print(f"❌ Failed to initialize APNs: {e}")
-                self.client = None
+                print(f"❌ Failed to initialize APNs client: {e}")
+                import traceback
+                traceback.print_exc()
+                self._client = None
         else:
             missing = []
             if not key_source: missing.append("APNS_KEY_PATH or APNS_KEY_CONTENT")
@@ -112,9 +132,16 @@ class APNsService:
             print(f"⚠️ APNs not configured - missing: {', '.join(missing)}")
     
     @property
+    def client(self):
+        """Get the APNs client, initializing if needed."""
+        self._ensure_initialized()
+        return self._client
+    
+    @property
     def is_configured(self) -> bool:
         """Check if APNs is properly configured."""
-        return self.client is not None
+        self._ensure_initialized()
+        return self._client is not None
     
     async def send_notification(
         self,
