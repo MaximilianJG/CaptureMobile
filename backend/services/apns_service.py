@@ -59,17 +59,31 @@ class APNsService:
                     print(f"❌ APNs key doesn't look like a valid .p8 file")
                     print(f"   Key starts with: {key_text[:50]}...")
                 else:
-                    # Write to a permanent file in /tmp (not tempfile which may get cleaned)
+                    # Normalize the key: ensure Unix line endings and proper formatting
+                    key_text = key_text.replace('\r\n', '\n').replace('\r', '\n')
+                    
+                    # Ensure it ends with a newline
+                    if not key_text.endswith('\n'):
+                        key_text += '\n'
+                    
+                    # Write to a permanent file in /tmp
                     key_file_path = "/tmp/apns_auth_key.p8"
-                    with open(key_file_path, 'w') as f:
+                    with open(key_file_path, 'w', encoding='ascii', newline='\n') as f:
                         f.write(key_text)
+                    
+                    # Set proper permissions
+                    os.chmod(key_file_path, 0o600)
+                    
                     key_source = key_file_path
                     print(f"✅ APNs key written to {key_file_path}")
                     
-                    # Verify the file is readable
+                    # Verify the file content
                     with open(key_file_path, 'r') as f:
                         content = f.read()
-                        print(f"✅ APNs key file verified ({len(content)} bytes)")
+                        lines = content.strip().split('\n')
+                        print(f"✅ APNs key file verified ({len(content)} bytes, {len(lines)} lines)")
+                        print(f"   First line: {lines[0]}")
+                        print(f"   Last line: {lines[-1]}")
             except Exception as e:
                 print(f"❌ Failed to process APNS_KEY_CONTENT: {e}")
                 import traceback
