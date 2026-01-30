@@ -134,6 +134,34 @@ final class APIService {
         let message: String
     }
     
+    /// Response from async upload endpoint
+    struct AsyncUploadResponse: Codable {
+        let success: Bool
+        let jobId: String
+        let message: String
+        
+        enum CodingKeys: String, CodingKey {
+            case success
+            case jobId = "job_id"
+            case message
+        }
+    }
+    
+    /// Response from job status endpoint
+    struct JobStatusResponse: Codable {
+        let jobId: String
+        let status: String  // "processing", "completed", "failed"
+        let eventsToCreate: [ExtractedEventInfo]?
+        let error: String?
+        
+        enum CodingKeys: String, CodingKey {
+            case jobId = "job_id"
+            case status
+            case eventsToCreate = "events_to_create"
+            case error
+        }
+    }
+    
     // MARK: - Analyze Screenshot
     /// Sends a screenshot to the backend for analysis and creates events locally
     /// - Parameter image: The screenshot image to analyze
@@ -302,6 +330,109 @@ final class APIService {
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {
             return false
+        }
+    }
+    
+    // MARK: - Async Upload (Push Notification Flow)
+    
+    /// Upload screenshot asynchronously - returns immediately, result comes via push notification
+    /// - Parameters:
+    ///   - image: The screenshot image to analyze
+    ///   - userID: The user's Apple ID
+    /// - Returns: Job ID if upload was accepted, nil if failed
+    func uploadScreenshotAsync(_ image: UIImage, userID: String) async -> String? {
+        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+            return nil
+        }
+        
+        guard let url = URL(string: "\(baseURL)/analyze-screenshot-async") else {
+            return nil
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 30  // Short timeout - we just need to queue the job
+        
+        let body: [String: Any] = [
+            "image": imageData.base64EncodedString(),
+            "user_id": userID
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                return nil
+            }
+            
+            let asyncResponse = try JSONDecoder().decode(AsyncUploadResponse.self, from: data)
+            return asyncResponse.success ? asyncResponse.jobId : nil
+            
+        } catch {
+            print("Async upload failed: \(error)")
+            return nil
+        }
+    }
+    
+    // MARK: - Job Status (Fallback Recovery)
+    
+    /// Check the status of a pending job
+    /// - Parameter jobID: The job ID to check
+    /// - Returns: Job status response if found, nil if not found or error
+    func checkJobStatus(jobID: String) async -> JobStatusResponse? {
+        guard let url = URL(string: "\(baseURL)/job-status/\(jobID)") else {
+            return nil
+        }
+        
+        var request = URLRequest(url: url)
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 15
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                return nil
+            }
+            
+            return try JSONDecoder().decode(JobStatusResponse.self, from: data)
+            
+        } catch {
+            print("Job status check failed: \(error)")
+            return nil
+        }
+    }
+    
+    // MARK: - Device Token Registration
+    
+    /// Register device token for push notifications
+    /// - Parameters:
+    ///   - token: The APNs device token (hex string)
+    ///   - userID: The user's Apple ID
+    func registerDeviceToken(_ token: String, userID: String) async {
+        guard let url = URL(string: "\(baseURL)/register-device") else {
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 15
+        
+        let body = ["device_token": token, "user_id": userID]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        
+        do {
+            _ = try await URLSession.shared.data(for: request)
+            print("Device token registered successfully")
+        } catch {
+            print("Failed to register device token: \(error)")
         }
     }
 }

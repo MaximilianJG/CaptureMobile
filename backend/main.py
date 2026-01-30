@@ -6,13 +6,14 @@ to extract event information. Events are created locally by the iOS app via Even
 """
 
 import os
+import uuid
 from datetime import datetime, date
 import time
 from contextlib import asynccontextmanager
 from collections import defaultdict
-from typing import Dict
+from typing import Dict, Any, Optional
 
-from fastapi import FastAPI, HTTPException, status, Request, Depends
+from fastapi import FastAPI, HTTPException, status, Request, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -23,8 +24,13 @@ from models.schemas import (
     AnalyzeScreenshotRequest,
     AnalyzeScreenshotResponse,
     HealthResponse,
+    RegisterDeviceRequest,
+    AsyncAnalyzeResponse,
+    JobStatusResponse,
+    ExtractedEventInfo,
 )
 from services.openai_service import OpenAIService
+from services.apns_service import apns_service
 
 # Load environment variables
 load_dotenv()
@@ -95,6 +101,15 @@ daily_tracker = DailyLimitTracker()
 
 # Initialize services
 openai_service = OpenAIService()
+
+# ============================================
+# In-Memory Storage (use Redis/DB in production)
+# ============================================
+# Device tokens for push notifications: user_id -> device_token
+device_tokens: Dict[str, str] = {}
+
+# Pending jobs for async processing: job_id -> job_data
+pending_jobs: Dict[str, Dict[str, Any]] = {}
 
 
 # ============================================
@@ -296,6 +311,216 @@ async def get_stats(request: Request, _: None = Depends(verify_api_key)):
             "per_user_daily": PER_USER_DAILY_LIMIT,
         }
     }
+
+
+# ============================================
+# Device Registration (for Push Notifications)
+# ============================================
+
+@app.post("/register-device", tags=["Push Notifications"])
+async def register_device(
+    body: RegisterDeviceRequest,
+    _: None = Depends(verify_api_key),
+):
+    """
+    Register a device token for push notifications.
+    
+    Called by the iOS app when the user grants notification permission.
+    The token is used to send push notifications when async processing completes.
+    """
+    device_tokens[body.user_id] = body.device_token
+    print(f"📱 Device registered for user: {body.user_id[:20]}...")
+    return {"success": True, "message": "Device registered"}
+
+
+# ============================================
+# Async Screenshot Analysis (Push Notification Flow)
+# ============================================
+
+async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
+    """
+    Background task: Process screenshot and send push notification when done.
+    
+    This runs after the /analyze-screenshot-async endpoint returns,
+    allowing the iOS shortcut to return immediately.
+    """
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(f"\n[{timestamp}] === ASYNC JOB {job_id[:8]} PROCESSING ===", flush=True)
+    
+    try:
+        # Analyze screenshot with OpenAI
+        openai_start = time.time()
+        print(f"[{timestamp}] Sending to OpenAI...", flush=True)
+        analysis_result = await openai_service.analyze_screenshot(image)
+        openai_elapsed = time.time() - openai_start
+        print(f"[{timestamp}] OpenAI completed in {openai_elapsed:.1f}s", flush=True)
+        
+        # Get device token for push notification
+        device_token = device_tokens.get(user_id)
+        
+        if not analysis_result.found_events or len(analysis_result.events) == 0:
+            # No events found
+            pending_jobs[job_id] = {
+                "user_id": user_id,
+                "status": "completed",
+                "events": [],
+                "message": "No events found"
+            }
+            print(f"[{timestamp}] No events found", flush=True)
+            
+            if device_token:
+                await apns_service.send_no_events_notification(device_token)
+            return
+        
+        # Success - store result
+        pending_jobs[job_id] = {
+            "user_id": user_id,
+            "status": "completed",
+            "events": analysis_result.events,
+            "message": f"Found {len(analysis_result.events)} event(s)"
+        }
+        
+        # Log detected events
+        print(f"[{timestamp}] Found {len(analysis_result.events)} event(s):", flush=True)
+        for idx, event_info in enumerate(analysis_result.events, 1):
+            print(f"[{timestamp}]   {idx}. {event_info.title} | {event_info.date} {event_info.start_time or 'all-day'}", flush=True)
+        
+        # Send push notification
+        if device_token:
+            await apns_service.send_event_created_notification(device_token, analysis_result.events)
+            print(f"[{timestamp}] Push notification sent", flush=True)
+        else:
+            print(f"[{timestamp}] No device token - skipping push", flush=True)
+            
+    except Exception as e:
+        print(f"[{timestamp}] ASYNC JOB ERROR: {str(e)}", flush=True)
+        pending_jobs[job_id] = {
+            "user_id": user_id,
+            "status": "failed",
+            "error": str(e)
+        }
+        
+        # Send error notification
+        device_token = device_tokens.get(user_id)
+        if device_token:
+            await apns_service.send_error_notification(device_token, str(e))
+
+
+@app.post(
+    "/analyze-screenshot-async",
+    response_model=AsyncAnalyzeResponse,
+    tags=["Screenshot Analysis"],
+)
+@limiter.limit(f"{RATE_LIMIT_PER_MINUTE}/minute")
+async def analyze_screenshot_async(
+    request: Request,
+    body: AnalyzeScreenshotRequest,
+    background_tasks: BackgroundTasks,
+    _: None = Depends(verify_api_key),
+):
+    """
+    Analyze a screenshot asynchronously (for push notification flow).
+    
+    This endpoint returns immediately after queuing the job. The actual processing
+    happens in the background, and a push notification is sent when complete.
+    
+    Use this when the iOS app has push notifications enabled.
+    
+    Steps:
+    1. Validates request and checks rate limits
+    2. Generates a job ID and queues background processing
+    3. Returns immediately with job ID
+    4. Background: Processes screenshot with OpenAI
+    5. Background: Sends push notification with results
+    """
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(f"\n[{timestamp}] === NEW ASYNC CAPTURE REQUEST ===", flush=True)
+    
+    try:
+        # Validate image size
+        validate_image_size(body.image)
+        image_size_kb = len(body.image) / 1024
+        print(f"[{timestamp}] Image size: {image_size_kb:.0f} KB", flush=True)
+        
+        # Check daily limits
+        user_id = body.user_id
+        print(f"[{timestamp}] User: {user_id[:20]}..." if len(user_id) > 20 else f"[{timestamp}] User: {user_id}", flush=True)
+        
+        allowed, error_msg = daily_tracker.check_and_increment(user_id)
+        if not allowed:
+            print(f"[{timestamp}] RATE LIMITED: {error_msg}", flush=True)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=error_msg
+            )
+        
+        # Generate job ID and store initial state
+        job_id = str(uuid.uuid4())
+        pending_jobs[job_id] = {
+            "user_id": user_id,
+            "status": "processing",
+            "created_at": timestamp
+        }
+        
+        # Queue background processing
+        background_tasks.add_task(
+            process_screenshot_and_notify,
+            job_id=job_id,
+            image=body.image,
+            user_id=user_id
+        )
+        
+        print(f"[{timestamp}] Job queued: {job_id[:8]}...", flush=True)
+        
+        return AsyncAnalyzeResponse(
+            success=True,
+            job_id=job_id,
+            message="Processing started. You'll receive a notification when complete."
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[{timestamp}] ERROR: {str(e)}", flush=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to queue screenshot processing: {str(e)}"
+        )
+
+
+# ============================================
+# Job Status (for fallback recovery)
+# ============================================
+
+@app.get(
+    "/job-status/{job_id}",
+    response_model=JobStatusResponse,
+    tags=["Screenshot Analysis"],
+)
+async def get_job_status(
+    job_id: str,
+    _: None = Depends(verify_api_key),
+):
+    """
+    Check the status of an async processing job.
+    
+    Used by the iOS app to recover pending jobs when opened.
+    This is the fallback for users who don't have push notifications enabled.
+    """
+    job = pending_jobs.get(job_id)
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found or expired"
+        )
+    
+    return JobStatusResponse(
+        job_id=job_id,
+        status=job.get("status", "unknown"),
+        events_to_create=job.get("events"),
+        error=job.get("error")
+    )
 
 
 # ============================================

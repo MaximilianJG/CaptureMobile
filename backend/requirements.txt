@@ -25,3 +25,6 @@ httpx>=0.26.0
 
 # Timezone support
 pytz>=2024.1
+
+# Apple Push Notifications
+aioapns>=3.0.0

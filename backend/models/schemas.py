@@ -17,6 +17,12 @@ class AnalyzeScreenshotRequest(BaseModel):
     user_id: str = Field(..., description="Apple user ID for rate limiting")
 
 
+class RegisterDeviceRequest(BaseModel):
+    """Request body for device token registration."""
+    user_id: str = Field(..., description="Apple user ID")
+    device_token: str = Field(..., description="APNs device token")
+
+
 # ============================================
 # Response Schemas
 # ============================================
@@ -32,6 +38,21 @@ class HealthResponse(BaseModel):
     """Response from health check endpoint."""
     status: str = Field(..., description="Service status")
     timestamp: str = Field(..., description="Current server timestamp")
+
+
+class AsyncAnalyzeResponse(BaseModel):
+    """Response from async screenshot analysis endpoint."""
+    success: bool = Field(..., description="Whether the job was queued")
+    job_id: str = Field(..., description="Job ID to track status")
+    message: str = Field(..., description="Status message")
+
+
+class JobStatusResponse(BaseModel):
+    """Response from job status endpoint."""
+    job_id: str = Field(..., description="Job ID")
+    status: str = Field(..., description="Job status: processing, completed, failed")
+    events_to_create: Optional[List["ExtractedEventInfo"]] = Field(None, description="Events if completed")
+    error: Optional[str] = Field(None, description="Error message if failed")
 
 
 # ============================================

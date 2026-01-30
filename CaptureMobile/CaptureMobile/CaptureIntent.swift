@@ -79,35 +79,119 @@ struct CaptureScreenshotIntent: AppIntent {
             return .result(value: "❌ No calendar access. Please open Capture app and grant calendar permission.")
         }
         
-        // Send immediate notification
-        sendNotification(
-            title: "Analyzing Screenshot...",
-            body: "Keep the app in the background."
-        )
+        // Check notification authorization to decide which flow to use
+        let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
+        let pushEnabled = notificationSettings.authorizationStatus == .authorized
         
-        // Start background upload - this survives even after the shortcut terminates!
-        // iOS Background URLSession handles the network request independently
-        let success = BackgroundUploadManager.shared.uploadScreenshot(image, userID: userID)
+        PostHogSDK.shared.capture("shortcut_flow_selected", properties: [
+            "flow": pushEnabled ? "async_push" : "sync_fallback"
+        ])
         
-        if !success {
-            PostHogSDK.shared.capture("shortcut_completed", properties: [
-                "success": false,
-                "error": "upload_start_failed"
-            ])
-            PostHogSDK.shared.flush()
-            return .result(value: "❌ Failed to start upload")
+        if pushEnabled {
+            // FLOW A: Push notifications enabled - use async flow
+            return await performAsyncFlow(image: image, userID: userID)
+        } else {
+            // FLOW B: No push - try synchronous with timeout
+            return await performSyncFlow(image: image, userID: userID)
         }
-        
-        PostHogSDK.shared.capture("shortcut_background_upload_initiated")
-        PostHogSDK.shared.flush()
-        
-        // Return immediately - the background upload continues independently!
-        // User will get a notification when processing is complete
-        return .result(value: "📸 Processing in background...")
     }
     
     // Open the app when there's an error (optional)
     static var openAppWhenRun: Bool = false
+    
+    // MARK: - Flow A: Async with Push Notifications
+    
+    /// Upload asynchronously - returns immediately, result comes via push notification
+    @MainActor
+    private func performAsyncFlow(image: UIImage, userID: String) async -> some IntentResult & ReturnsValue<String> {
+        // Upload to async endpoint
+        if let jobID = await APIService.shared.uploadScreenshotAsync(image, userID: userID) {
+            PostHogSDK.shared.capture("shortcut_async_upload_success", properties: [
+                "job_id": jobID
+            ])
+            PostHogSDK.shared.flush()
+            
+            return .result(value: "📸 Analyzing... You'll get a notification when done.")
+        } else {
+            PostHogSDK.shared.capture("shortcut_async_upload_failed")
+            PostHogSDK.shared.flush()
+            
+            return .result(value: "❌ Upload failed. Check your connection.")
+        }
+    }
+    
+    // MARK: - Flow B: Synchronous with Timeout Fallback
+    
+    /// Try to complete synchronously - if it times out, save as pending job
+    @MainActor
+    private func performSyncFlow(image: UIImage, userID: String) async -> some IntentResult & ReturnsValue<String> {
+        // Send immediate notification
+        sendNotification(
+            title: "Analyzing Screenshot...",
+            body: "This may take a moment."
+        )
+        
+        do {
+            // Try to complete synchronously (API has 120s timeout, but shortcuts may timeout sooner)
+            let result = try await APIService.shared.analyzeAndCreateEvents(image)
+            
+            PostHogSDK.shared.capture("shortcut_sync_success", properties: [
+                "events_created": result.eventsCreated
+            ])
+            PostHogSDK.shared.flush()
+            
+            // Send success notification
+            if result.eventsCreated == 1 {
+                sendNotification(
+                    title: "Event Created",
+                    body: result.firstEventTitle ?? "New event"
+                )
+                return .result(value: "✅ \(result.firstEventTitle ?? "Event") created!")
+            } else {
+                sendNotification(
+                    title: "\(result.eventsCreated) Events Created",
+                    body: result.message
+                )
+                return .result(value: "✅ \(result.eventsCreated) events created!")
+            }
+            
+        } catch let error as URLError where error.code == .timedOut {
+            // Timeout - start an async job and save as pending
+            PostHogSDK.shared.capture("shortcut_sync_timeout")
+            
+            // Try to start async processing
+            if let jobID = await APIService.shared.uploadScreenshotAsync(image, userID: userID) {
+                PendingJobManager.shared.savePendingJob(jobID: jobID)
+                PostHogSDK.shared.flush()
+                return .result(value: "⏳ Still processing... Open the Capture app to see results.")
+            } else {
+                PostHogSDK.shared.flush()
+                return .result(value: "⏳ Processing took too long. Open the Capture app to try again.")
+            }
+            
+        } catch let error as APIService.APIError {
+            PostHogSDK.shared.capture("shortcut_sync_failed", properties: [
+                "error": error.localizedDescription
+            ])
+            PostHogSDK.shared.flush()
+            
+            // Send failure notification
+            sendNotification(
+                title: "Capture Failed",
+                body: error.localizedDescription
+            )
+            
+            return .result(value: "❌ \(error.localizedDescription)")
+            
+        } catch {
+            PostHogSDK.shared.capture("shortcut_sync_failed", properties: [
+                "error": error.localizedDescription
+            ])
+            PostHogSDK.shared.flush()
+            
+            return .result(value: "❌ \(error.localizedDescription)")
+        }
+    }
     
     // MARK: - Notification Helpers
     
