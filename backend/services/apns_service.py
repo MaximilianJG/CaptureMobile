@@ -75,12 +75,32 @@ class APNsService:
                     print(f"   Key starts with: {key_text[:50]}...")
                     return
                 
-                # Normalize the key: ensure Unix line endings and proper formatting
+                # Parse the PEM and re-wrap properly at 64 chars per line
+                # This is required by cryptography library
                 key_text = key_text.replace('\r\n', '\n').replace('\r', '\n')
                 
-                # Ensure it ends with a newline
-                if not key_text.endswith('\n'):
-                    key_text += '\n'
+                # Extract the base64 content between headers
+                lines = key_text.strip().split('\n')
+                header = lines[0]
+                footer = lines[-1]
+                
+                # Get all the base64 content (everything between header and footer)
+                base64_content = ''.join(lines[1:-1])
+                # Remove any whitespace from the base64
+                base64_content = ''.join(base64_content.split())
+                
+                print(f"   Base64 content length: {len(base64_content)} chars")
+                
+                # Re-wrap at exactly 64 characters per line (PEM standard)
+                wrapped_lines = [base64_content[i:i+64] for i in range(0, len(base64_content), 64)]
+                
+                # Reconstruct the PEM file
+                pem_lines = [header] + wrapped_lines + [footer]
+                key_text = '\n'.join(pem_lines) + '\n'
+                
+                print(f"   Reconstructed PEM: {len(pem_lines)} lines")
+                for i, line in enumerate(pem_lines):
+                    print(f"   Line {i+1}: {len(line)} chars")
                 
                 # Write to a permanent file in /tmp
                 key_file_path = "/tmp/apns_auth_key.p8"
@@ -95,11 +115,11 @@ class APNsService:
                 # Verify the file content
                 with open(key_file_path, 'r') as f:
                     content = f.read()
-                    lines = content.strip().split('\n')
+                    verify_lines = content.strip().split('\n')
                     print(f"✅ APNs key written to {key_file_path}")
-                    print(f"   File size: {len(content)} bytes, {len(lines)} lines")
-                    print(f"   First line: {lines[0]}")
-                    print(f"   Last line: {lines[-1]}")
+                    print(f"   File size: {len(content)} bytes, {len(verify_lines)} lines")
+                    print(f"   First line: {verify_lines[0]}")
+                    print(f"   Last line: {verify_lines[-1]}")
                     
             except Exception as e:
                 print(f"❌ Failed to process APNS_KEY_CONTENT: {e}")
