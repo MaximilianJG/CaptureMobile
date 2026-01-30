@@ -41,7 +41,6 @@ class APNsService:
             key_source = key_path
         elif key_content:
             import base64
-            import tempfile
             try:
                 # Check if content is already the raw key (starts with -----BEGIN)
                 if key_content.strip().startswith("-----BEGIN"):
@@ -60,12 +59,17 @@ class APNsService:
                     print(f"❌ APNs key doesn't look like a valid .p8 file")
                     print(f"   Key starts with: {key_text[:50]}...")
                 else:
-                    # Write to temp file
-                    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.p8', delete=False)
-                    temp_file.write(key_text)
-                    temp_file.close()
-                    key_source = temp_file.name
-                    print(f"✅ APNs key written to temp file")
+                    # Write to a permanent file in /tmp (not tempfile which may get cleaned)
+                    key_file_path = "/tmp/apns_auth_key.p8"
+                    with open(key_file_path, 'w') as f:
+                        f.write(key_text)
+                    key_source = key_file_path
+                    print(f"✅ APNs key written to {key_file_path}")
+                    
+                    # Verify the file is readable
+                    with open(key_file_path, 'r') as f:
+                        content = f.read()
+                        print(f"✅ APNs key file verified ({len(content)} bytes)")
             except Exception as e:
                 print(f"❌ Failed to process APNS_KEY_CONTENT: {e}")
                 import traceback
