@@ -120,6 +120,22 @@ class APNsService:
                     print(f"   File size: {len(content)} bytes, {len(verify_lines)} lines")
                     print(f"   First line: {verify_lines[0]}")
                     print(f"   Last line: {verify_lines[-1]}")
+                
+                # Pre-validate the key with cryptography before aioapns uses it
+                try:
+                    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+                    with open(key_file_path, 'rb') as f:
+                        key_data = f.read()
+                        print(f"🔍 Testing key load with cryptography...")
+                        print(f"   Raw bytes: {key_data[:50]}...")
+                        print(f"   Raw bytes (hex): {key_data[:50].hex()}")
+                        private_key = load_pem_private_key(key_data, password=None)
+                        print(f"✅ Key validated with cryptography: {type(private_key).__name__}")
+                except Exception as crypto_error:
+                    print(f"❌ Cryptography failed to load key: {crypto_error}")
+                    import traceback
+                    traceback.print_exc()
+                    # Continue anyway to see if aioapns handles it differently
                     
             except Exception as e:
                 print(f"❌ Failed to process APNS_KEY_CONTENT: {e}")
