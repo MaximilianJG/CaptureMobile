@@ -6,6 +6,8 @@
 //
 
 import Foundation
+import Combine
+import UserNotifications
 
 /// Manages pending capture jobs that need to be recovered when the app opens.
 /// Used as a fallback when push notifications aren't available.
@@ -139,5 +141,3 @@ final class PendingJobManager: ObservableObject {
         UNUserNotificationCenter.current().add(request)
     }
 }
-
-import UserNotifications

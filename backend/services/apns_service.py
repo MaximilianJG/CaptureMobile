@@ -40,18 +40,36 @@ class APNsService:
         if key_path and os.path.exists(key_path):
             key_source = key_path
         elif key_content:
-            # Decode base64 key content and write to temp file
             import base64
             import tempfile
             try:
-                key_bytes = base64.b64decode(key_content)
-                temp_file = tempfile.NamedTemporaryFile(mode='wb', suffix='.p8', delete=False)
-                temp_file.write(key_bytes)
-                temp_file.close()
-                key_source = temp_file.name
-                print(f"📝 APNs key loaded from environment variable")
+                # Check if content is already the raw key (starts with -----BEGIN)
+                if key_content.strip().startswith("-----BEGIN"):
+                    # Raw key content provided directly
+                    key_text = key_content.strip()
+                    print(f"📝 APNs key provided as raw PEM content")
+                else:
+                    # Base64 encoded - strip all whitespace and decode
+                    cleaned_content = key_content.replace('\n', '').replace('\r', '').replace(' ', '')
+                    key_bytes = base64.b64decode(cleaned_content)
+                    key_text = key_bytes.decode('utf-8')
+                    print(f"📝 APNs key decoded from base64")
+                
+                # Validate the key looks correct
+                if "-----BEGIN PRIVATE KEY-----" not in key_text:
+                    print(f"❌ APNs key doesn't look like a valid .p8 file")
+                    print(f"   Key starts with: {key_text[:50]}...")
+                else:
+                    # Write to temp file
+                    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.p8', delete=False)
+                    temp_file.write(key_text)
+                    temp_file.close()
+                    key_source = temp_file.name
+                    print(f"✅ APNs key written to temp file")
             except Exception as e:
-                print(f"❌ Failed to decode APNS_KEY_CONTENT: {e}")
+                print(f"❌ Failed to process APNS_KEY_CONTENT: {e}")
+                import traceback
+                traceback.print_exc()
         
         if key_source and key_id and team_id and self.bundle_id:
             try:
