@@ -178,7 +178,7 @@ class AppleAuthManager: NSObject, ObservableObject {
         ])
         
         // Register device token for push notifications (may have been received before sign-in)
-        DeviceTokenManager.shared.registerWithBackendIfNeeded()
+        DeviceTokenManager.shared.registerIfNeeded()
     }
 }
 

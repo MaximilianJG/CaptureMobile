@@ -13,10 +13,9 @@ import UserNotifications
 @main
 struct CaptureMobileApp: App {
     
-    // Use AppDelegate for push notifications and background handling
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
     
-    // Register App Shortcuts with the system
     init() {
         // Initialize PostHog Analytics
         let config = PostHogConfig(
@@ -25,10 +24,9 @@ struct CaptureMobileApp: App {
         )
         PostHogSDK.shared.setup(config)
         
-        // Request notification permission for capture results
+        // Request notification permission
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             if granted {
-                // Register for remote push notifications if authorized
                 DispatchQueue.main.async {
                     UIApplication.shared.registerForRemoteNotifications()
                 }
@@ -36,7 +34,6 @@ struct CaptureMobileApp: App {
         }
         
         if #available(iOS 16.0, *) {
-            // Update system about app shortcuts (currently empty - we use iCloud shortcut instead)
             CaptureShortcuts.updateAppShortcutParameters()
         }
     }
@@ -44,21 +41,22 @@ struct CaptureMobileApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .onAppear {
-                    // Register device token with backend (in case server restarted)
-                    DeviceTokenManager.shared.registerWithBackendIfNeeded()
-                    
-                    // Check for pending jobs when app opens
-                    Task {
-                        await PendingJobManager.shared.recoverPendingJobs()
-                    }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                // Register device token when app becomes active (handles server restarts)
+                DeviceTokenManager.shared.registerIfNeeded()
+                
+                // Check for pending jobs
+                Task {
+                    await PendingJobManager.shared.recoverPendingJobs()
                 }
+            }
         }
     }
 }
 
 // MARK: - Device Token Manager
-// Handles storing and registering device tokens with the backend
 
 class DeviceTokenManager {
     static let shared = DeviceTokenManager()
@@ -66,49 +64,38 @@ class DeviceTokenManager {
     
     private let tokenKey = "apns_device_token"
     
-    /// Store the device token locally and register with backend
-    func storeAndRegister(_ token: String) {
-        // Store locally
-        UserDefaults.standard.set(token, forKey: tokenKey)
-        print("📱 Device token stored: \(token.prefix(16))...")
-        
-        // Try to register with backend immediately
-        registerWithBackendIfNeeded()
-    }
-    
-    /// Get the stored device token
     var storedToken: String? {
-        return UserDefaults.standard.string(forKey: tokenKey)
+        UserDefaults.standard.string(forKey: tokenKey)
     }
     
-    /// Register device token with backend if we have both token and user ID
-    func registerWithBackendIfNeeded() {
-        guard let token = storedToken else {
-            print("📱 No device token stored yet")
+    /// Called when APNs gives us a new token
+    func store(_ token: String) {
+        UserDefaults.standard.set(token, forKey: tokenKey)
+        print("📱 Device token stored")
+        registerIfNeeded()
+    }
+    
+    /// Register with backend if we have token and user ID
+    func registerIfNeeded() {
+        guard let token = storedToken,
+              let userID = AppleAuthManager.shared.getUserID() else {
             return
         }
         
-        guard let userID = AppleAuthManager.shared.getUserID() else {
-            print("📱 No user ID - will register token after login")
-            return
-        }
-        
-        // Register with backend
         Task {
             await APIService.shared.registerDeviceToken(token, userID: userID)
         }
     }
 }
 
-// MARK: - AppDelegate for Push Notifications
+// MARK: - AppDelegate
 
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Set notification delegate for handling pushes
         UNUserNotificationCenter.current().delegate = self
         
-        // Check if notifications are authorized and register for push
+        // Register for push notifications if authorized
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             if settings.authorizationStatus == .authorized {
                 DispatchQueue.main.async {
@@ -120,59 +107,35 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         return true
     }
     
-    // MARK: - Push Notification Registration
+    // MARK: - Push Token
     
-    /// Called when APNs successfully registers the device
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        // Convert token to hex string
         let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-        print("📱 APNs device token received: \(token.prefix(16))...")
-        
-        // Store and register with backend
-        DeviceTokenManager.shared.storeAndRegister(token)
+        DeviceTokenManager.shared.store(token)
     }
     
-    /// Called if push notification registration fails
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        print("❌ Failed to register for push notifications: \(error.localizedDescription)")
+        print("❌ Push registration failed: \(error.localizedDescription)")
     }
     
-    // MARK: - UNUserNotificationCenterDelegate
+    // MARK: - Notification Handling
     
-    /// Handle notification when app is in foreground
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        let userInfo = notification.request.content.userInfo
-        
-        // Process push payload if it contains event data
-        handlePushPayload(userInfo)
-        
-        // Show the notification banner
+        handlePushPayload(notification.request.content.userInfo)
         return [.banner, .sound]
     }
     
-    /// Handle notification when user taps it
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        let userInfo = response.notification.request.content.userInfo
-        handlePushPayload(userInfo)
+        handlePushPayload(response.notification.request.content.userInfo)
     }
     
-    // MARK: - Push Payload Handling
-    
-    /// Process push notification payload and create calendar events
     private func handlePushPayload(_ userInfo: [AnyHashable: Any]) {
-        guard let action = userInfo["action"] as? String else {
-            return  // Not our push notification format
-        }
+        guard let action = userInfo["action"] as? String else { return }
         
         switch action {
         case "create_events":
-            // Parse events from push payload
-            guard let eventsArray = userInfo["events"] as? [[String: Any]] else {
-                print("No events in push payload")
-                return
-            }
+            guard let eventsArray = userInfo["events"] as? [[String: Any]] else { return }
             
-            // Convert to ExtractedEventInfo and create calendar events
             var createdCount = 0
             for eventDict in eventsArray {
                 if let eventInfo = parseEventInfo(from: eventDict) {
@@ -184,33 +147,24 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                 }
             }
             
-            print("✅ Push: Created \(createdCount) event(s) from notification")
-            PostHogSDK.shared.capture("push_events_created", properties: [
-                "count": createdCount
-            ])
+            print("✅ Push: Created \(createdCount) event(s)")
+            PostHogSDK.shared.capture("push_events_created", properties: ["count": createdCount])
             
         case "no_events":
-            print("Push: No events found in screenshot")
             PostHogSDK.shared.capture("push_no_events")
             
         case "error":
-            let errorMessage = userInfo["error"] as? String ?? "Unknown error"
-            print("Push: Error - \(errorMessage)")
-            PostHogSDK.shared.capture("push_error", properties: [
-                "error": errorMessage
-            ])
+            let error = userInfo["error"] as? String ?? "Unknown"
+            PostHogSDK.shared.capture("push_error", properties: ["error": error])
             
         default:
-            print("Push: Unknown action - \(action)")
+            break
         }
     }
     
-    /// Parse event info from dictionary (from push payload)
     private func parseEventInfo(from dict: [String: Any]) -> APIService.ExtractedEventInfo? {
         guard let title = dict["title"] as? String,
-              let date = dict["date"] as? String else {
-            return nil
-        }
+              let date = dict["date"] as? String else { return nil }
         
         return APIService.ExtractedEventInfo(
             title: title,

@@ -7,7 +7,6 @@ No dependency on aioapns - simpler and more reliable.
 
 import os
 import time
-import json
 import base64
 from typing import Optional, Dict, Any
 

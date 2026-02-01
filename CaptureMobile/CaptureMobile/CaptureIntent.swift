@@ -69,6 +69,9 @@ struct CaptureScreenshotIntent: AppIntent {
             return .result(value: "❌ Not signed in. Please open Capture app and sign in first.")
         }
         
+        // Ensure device token is registered (handles server restarts)
+        DeviceTokenManager.shared.registerIfNeeded()
+        
         // Check calendar access
         guard CalendarService.shared.hasAccess else {
             PostHogSDK.shared.capture("shortcut_completed", properties: [
