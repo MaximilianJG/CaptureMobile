@@ -1,6 +1,7 @@
 """
 Apple Push Notification Service (APNs) integration.
 
+Uses JWT-based authentication with .p8 key file.
 Sends push notifications to iOS devices when screenshot processing completes.
 """
 
@@ -17,7 +18,7 @@ except ImportError:
 
 
 class APNsService:
-    """Service for sending Apple Push Notifications."""
+    """Service for sending Apple Push Notifications using JWT authentication."""
     
     def __init__(self):
         self._client: Optional[Any] = None
@@ -36,136 +37,105 @@ class APNsService:
             return
         
         # Get configuration from environment
-        key_path = os.getenv("APNS_KEY_PATH")  # Path to .p8 file
-        key_content = os.getenv("APNS_KEY_CONTENT")  # Or base64-encoded key content
         key_id = os.getenv("APNS_KEY_ID")
         team_id = os.getenv("APNS_TEAM_ID")
         self.bundle_id = os.getenv("APNS_BUNDLE_ID", "")
         use_sandbox = os.getenv("APNS_SANDBOX", "true").lower() == "true"
+        
+        # Get the key - either from file path or content
+        key_path = os.getenv("APNS_KEY_PATH")
+        key_content = os.getenv("APNS_KEY_CONTENT")
         
         print(f"🔧 Initializing APNs service...")
         print(f"   Key ID: {key_id}")
         print(f"   Team ID: {team_id}")
         print(f"   Bundle ID: {self.bundle_id}")
         print(f"   Sandbox: {use_sandbox}")
-        print(f"   Key content length: {len(key_content) if key_content else 0}")
         
-        # Determine the key source
-        key_source = None
-        if key_path and os.path.exists(key_path):
-            key_source = key_path
-            print(f"📝 Using APNs key from file: {key_path}")
-        elif key_content:
-            import base64
-            try:
-                # Check if content is already the raw key (starts with -----BEGIN)
-                if key_content.strip().startswith("-----BEGIN"):
-                    key_text = key_content.strip()
-                    print(f"📝 APNs key provided as raw PEM content")
-                else:
-                    # Base64 encoded - strip all whitespace and decode
-                    cleaned_content = key_content.replace('\n', '').replace('\r', '').replace(' ', '')
-                    key_bytes = base64.b64decode(cleaned_content)
-                    key_text = key_bytes.decode('utf-8')
-                    print(f"📝 APNs key decoded from base64 ({len(key_bytes)} bytes)")
-                
-                # Validate the key looks correct
-                if "-----BEGIN PRIVATE KEY-----" not in key_text:
-                    print(f"❌ APNs key doesn't look like a valid .p8 file")
-                    print(f"   Key starts with: {key_text[:50]}...")
-                    return
-                
-                # Parse the PEM and re-wrap properly at 64 chars per line
-                # This is required by cryptography library
-                key_text = key_text.replace('\r\n', '\n').replace('\r', '\n')
-                
-                # Extract the base64 content between headers
-                lines = key_text.strip().split('\n')
-                header = lines[0]
-                footer = lines[-1]
-                
-                # Get all the base64 content (everything between header and footer)
-                base64_content = ''.join(lines[1:-1])
-                # Remove any whitespace from the base64
-                base64_content = ''.join(base64_content.split())
-                
-                print(f"   Base64 content length: {len(base64_content)} chars")
-                
-                # Re-wrap at exactly 64 characters per line (PEM standard)
-                wrapped_lines = [base64_content[i:i+64] for i in range(0, len(base64_content), 64)]
-                
-                # Reconstruct the PEM file
-                pem_lines = [header] + wrapped_lines + [footer]
-                key_text = '\n'.join(pem_lines) + '\n'
-                
-                print(f"   Reconstructed PEM: {len(pem_lines)} lines")
-                for i, line in enumerate(pem_lines):
-                    print(f"   Line {i+1}: {len(line)} chars")
-                
-                # Write to a permanent file in /tmp
-                key_file_path = "/tmp/apns_auth_key.p8"
-                with open(key_file_path, 'w', encoding='ascii', newline='\n') as f:
-                    f.write(key_text)
-                
-                # Set proper permissions
-                os.chmod(key_file_path, 0o600)
-                
-                key_source = key_file_path
-                
-                # Verify the file content
-                with open(key_file_path, 'r') as f:
-                    content = f.read()
-                    verify_lines = content.strip().split('\n')
-                    print(f"✅ APNs key written to {key_file_path}")
-                    print(f"   File size: {len(content)} bytes, {len(verify_lines)} lines")
-                    print(f"   First line: {verify_lines[0]}")
-                    print(f"   Last line: {verify_lines[-1]}")
-                
-                # Pre-validate the key with cryptography before aioapns uses it
-                try:
-                    from cryptography.hazmat.primitives.serialization import load_pem_private_key
-                    with open(key_file_path, 'rb') as f:
-                        key_data = f.read()
-                        print(f"🔍 Testing key load with cryptography...")
-                        print(f"   Raw bytes: {key_data[:50]}...")
-                        print(f"   Raw bytes (hex): {key_data[:50].hex()}")
-                        private_key = load_pem_private_key(key_data, password=None)
-                        print(f"✅ Key validated with cryptography: {type(private_key).__name__}")
-                except Exception as crypto_error:
-                    print(f"❌ Cryptography failed to load key: {crypto_error}")
-                    import traceback
-                    traceback.print_exc()
-                    # Continue anyway to see if aioapns handles it differently
-                    
-            except Exception as e:
-                print(f"❌ Failed to process APNS_KEY_CONTENT: {e}")
-                import traceback
-                traceback.print_exc()
-                return
+        # Determine key source
+        key_source = self._get_key_source(key_path, key_content)
         
-        if key_source and key_id and team_id and self.bundle_id:
-            try:
-                self._client = APNs(
-                    key=key_source,
-                    key_id=key_id,
-                    team_id=team_id,
-                    topic=self.bundle_id,
-                    use_sandbox=use_sandbox
-                )
-                env_type = "sandbox" if use_sandbox else "production"
-                print(f"✅ APNs client created ({env_type}) for {self.bundle_id}")
-            except Exception as e:
-                print(f"❌ Failed to initialize APNs client: {e}")
-                import traceback
-                traceback.print_exc()
-                self._client = None
-        else:
+        if not all([key_source, key_id, team_id, self.bundle_id]):
             missing = []
             if not key_source: missing.append("APNS_KEY_PATH or APNS_KEY_CONTENT")
             if not key_id: missing.append("APNS_KEY_ID")
             if not team_id: missing.append("APNS_TEAM_ID")
             if not self.bundle_id: missing.append("APNS_BUNDLE_ID")
             print(f"⚠️ APNs not configured - missing: {', '.join(missing)}")
+            return
+        
+        try:
+            self._client = APNs(
+                key=key_source,
+                key_id=key_id,
+                team_id=team_id,
+                topic=self.bundle_id,
+                use_sandbox=use_sandbox
+            )
+            env_type = "sandbox" if use_sandbox else "production"
+            print(f"✅ APNs client initialized ({env_type})")
+        except Exception as e:
+            print(f"❌ Failed to initialize APNs client: {e}")
+            self._client = None
+    
+    def _get_key_source(self, key_path: Optional[str], key_content: Optional[str]) -> Optional[str]:
+        """
+        Get the APNs key source - either a file path or the key content itself.
+        
+        Supports:
+        - File path to .p8 file
+        - Base64 encoded key content
+        - Raw PEM key content (with escaped newlines)
+        """
+        # Option 1: Key file path
+        if key_path and os.path.exists(key_path):
+            print(f"📝 Using APNs key from file: {key_path}")
+            return key_path
+        
+        # Option 2: Key content from environment variable
+        if key_content:
+            key_text = self._decode_key_content(key_content)
+            if not key_text:
+                return None
+            
+            # Write to temp file (aioapns requires a file path)
+            key_file = "/tmp/apns_key.p8"
+            try:
+                with open(key_file, 'w') as f:
+                    f.write(key_text)
+                os.chmod(key_file, 0o600)
+                print(f"📝 APNs key written to temp file")
+                return key_file
+            except Exception as e:
+                print(f"❌ Failed to write APNs key file: {e}")
+                return None
+        
+        return None
+    
+    def _decode_key_content(self, content: str) -> Optional[str]:
+        """Decode key content - handles base64 or raw PEM format."""
+        content = content.strip()
+        
+        # Check if it's already raw PEM format
+        if content.startswith("-----BEGIN"):
+            # Handle escaped newlines
+            key_text = content.replace("\\n", "\n")
+            print(f"📝 APNs key provided as raw PEM")
+            return key_text
+        
+        # Try base64 decoding
+        try:
+            import base64
+            decoded = base64.b64decode(content).decode('utf-8')
+            if "-----BEGIN PRIVATE KEY-----" in decoded:
+                print(f"📝 APNs key decoded from base64")
+                return decoded
+            else:
+                print(f"❌ Decoded content doesn't look like a .p8 key")
+                return None
+        except Exception as e:
+            print(f"❌ Failed to decode APNS_KEY_CONTENT: {e}")
+            return None
     
     @property
     def client(self):
@@ -190,10 +160,10 @@ class APNsService:
         Send a push notification to an iOS device.
         
         Args:
-            device_token: The APNs device token
+            device_token: The APNs device token (64 character hex string)
             title: Notification title
             body: Notification body text
-            data: Additional data payload (will be included in userInfo)
+            data: Additional data payload
             
         Returns:
             True if sent successfully, False otherwise
@@ -202,8 +172,12 @@ class APNsService:
             print(f"⚠️ Cannot send push - APNs not configured")
             return False
         
+        # Validate device token format
+        if not device_token or len(device_token) != 64:
+            print(f"❌ Invalid device token length: {len(device_token) if device_token else 0}")
+            return False
+        
         try:
-            # Build the notification payload
             payload = {
                 "aps": {
                     "alert": {
@@ -211,12 +185,11 @@ class APNsService:
                         "body": body
                     },
                     "sound": "default",
-                    "content-available": 1,  # Enable background processing
-                    "mutable-content": 1     # Allow notification service extension
+                    "content-available": 1,
+                    "mutable-content": 1
                 }
             }
             
-            # Add custom data to the payload
             if data:
                 payload.update(data)
             
@@ -229,14 +202,19 @@ class APNsService:
             response = await self.client.send_notification(request)
             
             if response.is_successful:
-                print(f"✅ Push notification sent: {title}")
+                print(f"✅ Push sent: {title}")
                 return True
             else:
-                print(f"❌ Push notification failed: {response.description}")
+                print(f"❌ Push failed: {response.description}")
+                # Log specific error for debugging
+                if "BadDeviceToken" in str(response.description):
+                    print(f"   Token may be invalid or for wrong environment")
+                elif "Unregistered" in str(response.description):
+                    print(f"   Device has unregistered from push notifications")
                 return False
                 
         except Exception as e:
-            print(f"❌ Error sending push notification: {e}")
+            print(f"❌ Push error: {e}")
             return False
     
     async def send_event_created_notification(
@@ -244,26 +222,16 @@ class APNsService:
         device_token: str,
         events: list,
     ) -> bool:
-        """
-        Send a notification when events are successfully created.
-        
-        Args:
-            device_token: The APNs device token
-            events: List of ExtractedEventInfo objects
-            
-        Returns:
-            True if sent successfully, False otherwise
-        """
+        """Send notification when events are successfully created."""
         if not events:
             return False
         
-        # Build title and body
         if len(events) == 1:
             title = "Event Created"
-            body = events[0].title if hasattr(events[0], 'title') else str(events[0].get('title', 'New Event'))
+            event = events[0]
+            body = event.title if hasattr(event, 'title') else str(event.get('title', 'New Event'))
         else:
             title = f"{len(events)} Events Created"
-            # Get first event title
             first_title = events[0].title if hasattr(events[0], 'title') else str(events[0].get('title', 'Event'))
             body = f"{first_title} and {len(events) - 1} more"
         
@@ -277,15 +245,15 @@ class APNsService:
             else:
                 events_data.append(event)
         
-        data = {
-            "action": "create_events",
-            "events": events_data
-        }
-        
-        return await self.send_notification(device_token, title, body, data)
+        return await self.send_notification(
+            device_token=device_token,
+            title=title,
+            body=body,
+            data={"action": "create_events", "events": events_data}
+        )
     
     async def send_no_events_notification(self, device_token: str) -> bool:
-        """Send a notification when no events were found in the screenshot."""
+        """Send notification when no events were found."""
         return await self.send_notification(
             device_token=device_token,
             title="No Events Found",
@@ -294,14 +262,12 @@ class APNsService:
         )
     
     async def send_error_notification(self, device_token: str, error_message: str) -> bool:
-        """Send a notification when processing failed."""
-        # Truncate error message if too long
-        truncated_error = error_message[:100] + "..." if len(error_message) > 100 else error_message
-        
+        """Send notification when processing failed."""
+        truncated = error_message[:100] + "..." if len(error_message) > 100 else error_message
         return await self.send_notification(
             device_token=device_token,
             title="Capture Failed",
-            body=truncated_error,
+            body=truncated,
             data={"action": "error", "error": error_message}
         )
 

@@ -45,11 +45,57 @@ struct CaptureMobileApp: App {
         WindowGroup {
             ContentView()
                 .onAppear {
+                    // Register device token with backend (in case server restarted)
+                    DeviceTokenManager.shared.registerWithBackendIfNeeded()
+                    
                     // Check for pending jobs when app opens
                     Task {
                         await PendingJobManager.shared.recoverPendingJobs()
                     }
                 }
+        }
+    }
+}
+
+// MARK: - Device Token Manager
+// Handles storing and registering device tokens with the backend
+
+class DeviceTokenManager {
+    static let shared = DeviceTokenManager()
+    private init() {}
+    
+    private let tokenKey = "apns_device_token"
+    
+    /// Store the device token locally and register with backend
+    func storeAndRegister(_ token: String) {
+        // Store locally
+        UserDefaults.standard.set(token, forKey: tokenKey)
+        print("📱 Device token stored: \(token.prefix(16))...")
+        
+        // Try to register with backend immediately
+        registerWithBackendIfNeeded()
+    }
+    
+    /// Get the stored device token
+    var storedToken: String? {
+        return UserDefaults.standard.string(forKey: tokenKey)
+    }
+    
+    /// Register device token with backend if we have both token and user ID
+    func registerWithBackendIfNeeded() {
+        guard let token = storedToken else {
+            print("📱 No device token stored yet")
+            return
+        }
+        
+        guard let userID = AppleAuthManager.shared.getUserID() else {
+            print("📱 No user ID - will register token after login")
+            return
+        }
+        
+        // Register with backend
+        Task {
+            await APIService.shared.registerDeviceToken(token, userID: userID)
         }
     }
 }
@@ -80,19 +126,15 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         // Convert token to hex string
         let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-        print("📱 Device token: \(token)")
+        print("📱 APNs device token received: \(token.prefix(16))...")
         
-        // Register with backend
-        Task {
-            if let userID = AppleAuthManager.shared.getUserID() {
-                await APIService.shared.registerDeviceToken(token, userID: userID)
-            }
-        }
+        // Store and register with backend
+        DeviceTokenManager.shared.storeAndRegister(token)
     }
     
     /// Called if push notification registration fails
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        print("❌ Failed to register for push notifications: \(error)")
+        print("❌ Failed to register for push notifications: \(error.localizedDescription)")
     }
     
     // MARK: - UNUserNotificationCenterDelegate

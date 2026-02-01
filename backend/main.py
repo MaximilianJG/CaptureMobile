@@ -103,8 +103,11 @@ daily_tracker = DailyLimitTracker()
 openai_service = OpenAIService()
 
 # ============================================
-# In-Memory Storage (use Redis/DB in production)
+# In-Memory Storage
+# NOTE: These are lost on server restart. For production, use Redis or a database.
+# The iOS app re-registers device tokens on app launch, so this is acceptable.
 # ============================================
+
 # Device tokens for push notifications: user_id -> device_token
 device_tokens: Dict[str, str] = {}
 
@@ -325,11 +328,20 @@ async def register_device(
     """
     Register a device token for push notifications.
     
-    Called by the iOS app when the user grants notification permission.
-    The token is used to send push notifications when async processing completes.
+    Called by the iOS app when the user grants notification permission
+    and on each app launch (to handle server restarts).
     """
-    device_tokens[body.user_id] = body.device_token
-    print(f"📱 Device registered for user: {body.user_id[:20]}...")
+    # Validate token format (should be 64 hex characters)
+    token = body.device_token.strip()
+    if len(token) != 64:
+        print(f"⚠️ Invalid device token length: {len(token)} (expected 64)")
+        return {"success": False, "message": "Invalid device token format"}
+    
+    device_tokens[body.user_id] = token
+    user_display = body.user_id[:20] + "..." if len(body.user_id) > 20 else body.user_id
+    token_display = token[:16] + "..."
+    print(f"📱 Device registered: user={user_display}, token={token_display}")
+    
     return {"success": True, "message": "Device registered"}
 
 
@@ -387,10 +399,13 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
         
         # Send push notification
         if device_token:
-            await apns_service.send_event_created_notification(device_token, analysis_result.events)
-            print(f"[{timestamp}] Push notification sent", flush=True)
+            success = await apns_service.send_event_created_notification(device_token, analysis_result.events)
+            if success:
+                print(f"[{timestamp}] Push notification sent", flush=True)
+            else:
+                print(f"[{timestamp}] Push notification failed - check APNs configuration", flush=True)
         else:
-            print(f"[{timestamp}] No device token - skipping push", flush=True)
+            print(f"[{timestamp}] No device token registered for user - skipping push", flush=True)
             
     except Exception as e:
         print(f"[{timestamp}] ASYNC JOB ERROR: {str(e)}", flush=True)

@@ -176,6 +176,9 @@ class AppleAuthManager: NSObject, ObservableObject {
         PostHogSDK.shared.capture("sign_in_completed", properties: [
             "provider": "apple"
         ])
+        
+        // Register device token for push notifications (may have been received before sign-in)
+        DeviceTokenManager.shared.registerWithBackendIfNeeded()
     }
 }
 
