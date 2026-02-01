@@ -352,33 +352,35 @@ async def register_device(
 async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
     """
     Background task: Process screenshot and send push notification when done.
-    
-    This runs after the /analyze-screenshot-async endpoint returns,
-    allowing the iOS shortcut to return immediately.
     """
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    print(f"\n[{timestamp}] === ASYNC JOB {job_id[:8]} PROCESSING ===", flush=True)
+    job_short = job_id[:8]
+    start_time = time.time()
+    
+    def log(msg: str):
+        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        print(f"[{ts}] [{job_short}] {msg}", flush=True)
+    
+    log("Started background processing")
     
     try:
-        # Analyze screenshot with OpenAI
-        openai_start = time.time()
-        print(f"[{timestamp}] Sending to OpenAI...", flush=True)
-        analysis_result = await openai_service.analyze_screenshot(image)
-        openai_elapsed = time.time() - openai_start
-        print(f"[{timestamp}] OpenAI completed in {openai_elapsed:.1f}s", flush=True)
-        
-        # Get device token for push notification
+        # Get device token early
         device_token = device_tokens.get(user_id)
+        log(f"Device token: {'found' if device_token else 'NOT FOUND'}")
+        
+        # Analyze screenshot with OpenAI
+        log("Sending to OpenAI...")
+        analysis_result = await openai_service.analyze_screenshot(image)
+        elapsed = time.time() - start_time
+        log(f"OpenAI completed in {elapsed:.1f}s")
         
         if not analysis_result.found_events or len(analysis_result.events) == 0:
-            # No events found
             pending_jobs[job_id] = {
                 "user_id": user_id,
                 "status": "completed",
                 "events": [],
                 "message": "No events found"
             }
-            print(f"[{timestamp}] No events found", flush=True)
+            log("No events found")
             
             if device_token:
                 await apns_service.send_no_events_notification(device_token)
@@ -393,32 +395,35 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
         }
         
         # Log detected events
-        print(f"[{timestamp}] Found {len(analysis_result.events)} event(s):", flush=True)
+        log(f"Found {len(analysis_result.events)} event(s):")
         for idx, event_info in enumerate(analysis_result.events, 1):
-            print(f"[{timestamp}]   {idx}. {event_info.title} | {event_info.date} {event_info.start_time or 'all-day'}", flush=True)
+            log(f"  {idx}. {event_info.title} | {event_info.date} {event_info.start_time or 'all-day'}")
         
         # Send push notification
         if device_token:
             success = await apns_service.send_event_created_notification(device_token, analysis_result.events)
-            if success:
-                print(f"[{timestamp}] Push notification sent", flush=True)
-            else:
-                print(f"[{timestamp}] Push notification failed - check APNs configuration", flush=True)
+            log(f"Push: {'sent' if success else 'FAILED'}")
         else:
-            print(f"[{timestamp}] No device token registered for user - skipping push", flush=True)
+            log("Push: skipped (no device token)")
             
     except Exception as e:
-        print(f"[{timestamp}] ASYNC JOB ERROR: {str(e)}", flush=True)
+        import traceback
+        log(f"ERROR: {str(e)}")
+        log(f"Traceback: {traceback.format_exc()}")
+        
         pending_jobs[job_id] = {
             "user_id": user_id,
             "status": "failed",
             "error": str(e)
         }
         
-        # Send error notification
-        device_token = device_tokens.get(user_id)
+        # Try to send error notification
         if device_token:
             await apns_service.send_error_notification(device_token, str(e))
+    
+    finally:
+        elapsed = time.time() - start_time
+        log(f"Completed in {elapsed:.1f}s")
 
 
 @app.post(
