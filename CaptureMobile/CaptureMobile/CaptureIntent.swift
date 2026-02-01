@@ -94,13 +94,18 @@ struct CaptureScreenshotIntent: AppIntent {
             // =====================================================
             // FLOW A: Push notifications enabled - use async flow
             // =====================================================
+            sendNotification(
+                title: "Analyzing Screenshot...",
+                body: "You'll get a notification when done."
+            )
+            
             if let jobID = await APIService.shared.uploadScreenshotAsync(image, userID: userID) {
                 PostHogSDK.shared.capture("shortcut_async_upload_success", properties: [
                     "job_id": jobID
                 ])
                 PostHogSDK.shared.flush()
                 
-                return .result(value: "📸 Analyzing... You'll get a notification when done.")
+                return .result(value: "📸 Analyzing...")
             } else {
                 PostHogSDK.shared.capture("shortcut_async_upload_failed")
                 PostHogSDK.shared.flush()

@@ -42,7 +42,7 @@ struct CaptureMobileApp: App {
         WindowGroup {
             ContentView()
         }
-        .onChange(of: scenePhase) { _, newPhase in
+        .onChange(of: scenePhase) { newPhase in
             if newPhase == .active {
                 // Register device token when app becomes active (handles server restarts)
                 DeviceTokenManager.shared.registerIfNeeded()
