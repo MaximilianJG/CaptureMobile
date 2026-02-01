@@ -121,7 +121,7 @@ class APNsService:
             # Handle escaped newlines
             key_text = content.replace("\\n", "\n")
             print(f"📝 APNs key provided as raw PEM")
-            return key_text
+            return self._normalize_pem(key_text)
         
         # Try base64 decoding
         try:
@@ -129,13 +129,45 @@ class APNsService:
             decoded = base64.b64decode(content).decode('utf-8')
             if "-----BEGIN PRIVATE KEY-----" in decoded:
                 print(f"📝 APNs key decoded from base64")
-                return decoded
+                return self._normalize_pem(decoded)
             else:
                 print(f"❌ Decoded content doesn't look like a .p8 key")
                 return None
         except Exception as e:
             print(f"❌ Failed to decode APNS_KEY_CONTENT: {e}")
             return None
+    
+    def _normalize_pem(self, pem_text: str) -> str:
+        """
+        Normalize PEM format to ensure cryptography library can parse it.
+        - Ensures Unix line endings (LF only)
+        - Ensures each base64 line is max 64 chars
+        - Ensures trailing newline
+        """
+        # Normalize line endings to LF
+        pem_text = pem_text.replace('\r\n', '\n').replace('\r', '\n')
+        
+        # Split into lines
+        lines = pem_text.strip().split('\n')
+        
+        if len(lines) < 3:
+            return pem_text  # Invalid PEM, return as-is
+        
+        header = lines[0]   # -----BEGIN PRIVATE KEY-----
+        footer = lines[-1]  # -----END PRIVATE KEY-----
+        
+        # Get the base64 content (everything between header and footer)
+        base64_lines = lines[1:-1]
+        base64_content = ''.join(line.strip() for line in base64_lines)
+        
+        # Re-wrap at 64 characters (PEM standard)
+        wrapped = [base64_content[i:i+64] for i in range(0, len(base64_content), 64)]
+        
+        # Rebuild PEM with proper formatting
+        result = header + '\n' + '\n'.join(wrapped) + '\n' + footer + '\n'
+        
+        print(f"📝 PEM normalized: {len(lines)} lines -> {len(wrapped) + 2} lines")
+        return result
     
     @property
     def client(self):
