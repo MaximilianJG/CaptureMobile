@@ -1,29 +1,36 @@
 """
 Apple Push Notification Service (APNs) integration.
 
-Uses JWT-based authentication with .p8 key file.
-Sends push notifications to iOS devices when screenshot processing completes.
+Uses direct HTTP/2 requests with JWT authentication.
+No dependency on aioapns - simpler and more reliable.
 """
 
 import os
+import time
+import json
+import base64
 from typing import Optional, Dict, Any
 
-# APNs client (optional - only used if configured)
-try:
-    from aioapns import APNs, NotificationRequest, PushType
-    APNS_AVAILABLE = True
-except ImportError:
-    APNS_AVAILABLE = False
-    print("⚠️ aioapns not installed - push notifications disabled")
+import httpx
+import jwt
 
 
 class APNsService:
     """Service for sending Apple Push Notifications using JWT authentication."""
     
+    # APNs endpoints
+    SANDBOX_URL = "https://api.sandbox.push.apple.com"
+    PRODUCTION_URL = "https://api.push.apple.com"
+    
     def __init__(self):
-        self._client: Optional[Any] = None
         self._initialized: bool = False
-        self.bundle_id: str = ""
+        self._key_id: Optional[str] = None
+        self._team_id: Optional[str] = None
+        self._private_key: Optional[str] = None
+        self._bundle_id: str = ""
+        self._use_sandbox: bool = True
+        self._token: Optional[str] = None
+        self._token_timestamp: float = 0
     
     def _ensure_initialized(self):
         """Lazy initialization - only initialize when first needed."""
@@ -32,154 +39,111 @@ class APNsService:
         
         self._initialized = True
         
-        if not APNS_AVAILABLE:
-            print("⚠️ APNs not available - aioapns package not installed")
-            return
-        
         # Get configuration from environment
-        key_id = os.getenv("APNS_KEY_ID")
-        team_id = os.getenv("APNS_TEAM_ID")
-        self.bundle_id = os.getenv("APNS_BUNDLE_ID", "")
-        use_sandbox = os.getenv("APNS_SANDBOX", "true").lower() == "true"
+        self._key_id = os.getenv("APNS_KEY_ID")
+        self._team_id = os.getenv("APNS_TEAM_ID")
+        self._bundle_id = os.getenv("APNS_BUNDLE_ID", "")
+        self._use_sandbox = os.getenv("APNS_SANDBOX", "true").lower() == "true"
         
-        # Get the key - either from file path or content
+        # Get the key content
         key_path = os.getenv("APNS_KEY_PATH")
         key_content = os.getenv("APNS_KEY_CONTENT")
         
         print(f"🔧 Initializing APNs service...")
-        print(f"   Key ID: {key_id}")
-        print(f"   Team ID: {team_id}")
-        print(f"   Bundle ID: {self.bundle_id}")
-        print(f"   Sandbox: {use_sandbox}")
+        print(f"   Key ID: {self._key_id}")
+        print(f"   Team ID: {self._team_id}")
+        print(f"   Bundle ID: {self._bundle_id}")
+        print(f"   Sandbox: {self._use_sandbox}")
         
-        # Determine key source
-        key_source = self._get_key_source(key_path, key_content)
+        # Load the private key
+        self._private_key = self._load_private_key(key_path, key_content)
         
-        if not all([key_source, key_id, team_id, self.bundle_id]):
+        if not all([self._private_key, self._key_id, self._team_id, self._bundle_id]):
             missing = []
-            if not key_source: missing.append("APNS_KEY_PATH or APNS_KEY_CONTENT")
-            if not key_id: missing.append("APNS_KEY_ID")
-            if not team_id: missing.append("APNS_TEAM_ID")
-            if not self.bundle_id: missing.append("APNS_BUNDLE_ID")
+            if not self._private_key: missing.append("APNS_KEY_PATH or APNS_KEY_CONTENT")
+            if not self._key_id: missing.append("APNS_KEY_ID")
+            if not self._team_id: missing.append("APNS_TEAM_ID")
+            if not self._bundle_id: missing.append("APNS_BUNDLE_ID")
             print(f"⚠️ APNs not configured - missing: {', '.join(missing)}")
-            return
-        
-        try:
-            self._client = APNs(
-                key=key_source,
-                key_id=key_id,
-                team_id=team_id,
-                topic=self.bundle_id,
-                use_sandbox=use_sandbox
-            )
-            env_type = "sandbox" if use_sandbox else "production"
-            print(f"✅ APNs client initialized ({env_type})")
-        except Exception as e:
-            print(f"❌ Failed to initialize APNs client: {e}")
-            self._client = None
+        else:
+            env_type = "sandbox" if self._use_sandbox else "production"
+            print(f"✅ APNs service initialized ({env_type})")
     
-    def _get_key_source(self, key_path: Optional[str], key_content: Optional[str]) -> Optional[str]:
-        """
-        Get the APNs key source - either a file path or the key content itself.
+    def _load_private_key(self, key_path: Optional[str], key_content: Optional[str]) -> Optional[str]:
+        """Load the private key from file or environment variable."""
         
-        Supports:
-        - File path to .p8 file
-        - Base64 encoded key content
-        - Raw PEM key content (with escaped newlines)
-        """
         # Option 1: Key file path
         if key_path and os.path.exists(key_path):
-            print(f"📝 Using APNs key from file: {key_path}")
-            return key_path
+            try:
+                with open(key_path, 'r') as f:
+                    key = f.read()
+                print(f"📝 APNs key loaded from file: {key_path}")
+                return key
+            except Exception as e:
+                print(f"❌ Failed to read key file: {e}")
+                return None
         
         # Option 2: Key content from environment variable
         if key_content:
-            key_text = self._decode_key_content(key_content)
-            if not key_text:
-                return None
+            key_content = key_content.strip()
             
-            # Write to temp file (aioapns requires a file path)
-            key_file = "/tmp/apns_key.p8"
-            try:
-                with open(key_file, 'w') as f:
-                    f.write(key_text)
-                os.chmod(key_file, 0o600)
-                print(f"📝 APNs key written to temp file")
-                return key_file
-            except Exception as e:
-                print(f"❌ Failed to write APNs key file: {e}")
-                return None
+            # Check if it's base64 encoded
+            if not key_content.startswith("-----BEGIN"):
+                try:
+                    decoded = base64.b64decode(key_content).decode('utf-8')
+                    if "-----BEGIN PRIVATE KEY-----" in decoded:
+                        print(f"📝 APNs key decoded from base64")
+                        return decoded
+                except Exception as e:
+                    print(f"❌ Failed to decode base64 key: {e}")
+                    return None
+            else:
+                # Raw PEM content (handle escaped newlines)
+                key = key_content.replace("\\n", "\n")
+                print(f"📝 APNs key loaded from environment")
+                return key
         
         return None
     
-    def _decode_key_content(self, content: str) -> Optional[str]:
-        """Decode key content - handles base64 or raw PEM format."""
-        content = content.strip()
+    def _get_auth_token(self) -> Optional[str]:
+        """Get or refresh the JWT authentication token."""
+        # Token is valid for 1 hour, refresh every 50 minutes
+        if self._token and (time.time() - self._token_timestamp) < 3000:
+            return self._token
         
-        # Check if it's already raw PEM format
-        if content.startswith("-----BEGIN"):
-            # Handle escaped newlines
-            key_text = content.replace("\\n", "\n")
-            print(f"📝 APNs key provided as raw PEM")
-            return self._normalize_pem(key_text)
-        
-        # Try base64 decoding
-        try:
-            import base64
-            decoded = base64.b64decode(content).decode('utf-8')
-            if "-----BEGIN PRIVATE KEY-----" in decoded:
-                print(f"📝 APNs key decoded from base64")
-                return self._normalize_pem(decoded)
-            else:
-                print(f"❌ Decoded content doesn't look like a .p8 key")
-                return None
-        except Exception as e:
-            print(f"❌ Failed to decode APNS_KEY_CONTENT: {e}")
+        if not all([self._private_key, self._key_id, self._team_id]):
             return None
-    
-    def _normalize_pem(self, pem_text: str) -> str:
-        """
-        Normalize PEM format to ensure cryptography library can parse it.
-        - Ensures Unix line endings (LF only)
-        - Ensures each base64 line is max 64 chars
-        - Ensures trailing newline
-        """
-        # Normalize line endings to LF
-        pem_text = pem_text.replace('\r\n', '\n').replace('\r', '\n')
         
-        # Split into lines
-        lines = pem_text.strip().split('\n')
-        
-        if len(lines) < 3:
-            return pem_text  # Invalid PEM, return as-is
-        
-        header = lines[0]   # -----BEGIN PRIVATE KEY-----
-        footer = lines[-1]  # -----END PRIVATE KEY-----
-        
-        # Get the base64 content (everything between header and footer)
-        base64_lines = lines[1:-1]
-        base64_content = ''.join(line.strip() for line in base64_lines)
-        
-        # Re-wrap at 64 characters (PEM standard)
-        wrapped = [base64_content[i:i+64] for i in range(0, len(base64_content), 64)]
-        
-        # Rebuild PEM with proper formatting
-        result = header + '\n' + '\n'.join(wrapped) + '\n' + footer + '\n'
-        
-        print(f"📝 PEM normalized: {len(lines)} lines -> {len(wrapped) + 2} lines")
-        return result
-    
-    @property
-    def client(self):
-        """Get the APNs client, initializing if needed."""
-        self._ensure_initialized()
-        return self._client
+        try:
+            now = int(time.time())
+            payload = {
+                "iss": self._team_id,
+                "iat": now
+            }
+            headers = {
+                "alg": "ES256",
+                "kid": self._key_id
+            }
+            
+            self._token = jwt.encode(
+                payload,
+                self._private_key,
+                algorithm="ES256",
+                headers=headers
+            )
+            self._token_timestamp = now
+            print(f"🔑 APNs JWT token generated")
+            return self._token
+            
+        except Exception as e:
+            print(f"❌ Failed to generate JWT token: {e}")
+            return None
     
     @property
     def is_configured(self) -> bool:
         """Check if APNs is properly configured."""
         self._ensure_initialized()
-        return self._client is not None
+        return all([self._private_key, self._key_id, self._team_id, self._bundle_id])
     
     async def send_notification(
         self,
@@ -200,7 +164,9 @@ class APNsService:
         Returns:
             True if sent successfully, False otherwise
         """
-        if not self.client:
+        self._ensure_initialized()
+        
+        if not self.is_configured:
             print(f"⚠️ Cannot send push - APNs not configured")
             return False
         
@@ -209,42 +175,73 @@ class APNsService:
             print(f"❌ Invalid device token length: {len(device_token) if device_token else 0}")
             return False
         
-        try:
-            payload = {
-                "aps": {
-                    "alert": {
-                        "title": title,
-                        "body": body
-                    },
-                    "sound": "default",
-                    "content-available": 1,
-                    "mutable-content": 1
-                }
+        # Get auth token
+        auth_token = self._get_auth_token()
+        if not auth_token:
+            print(f"❌ Failed to get APNs auth token")
+            return False
+        
+        # Build payload
+        payload = {
+            "aps": {
+                "alert": {
+                    "title": title,
+                    "body": body
+                },
+                "sound": "default",
+                "content-available": 1,
+                "mutable-content": 1
             }
-            
-            if data:
-                payload.update(data)
-            
-            request = NotificationRequest(
-                device_token=device_token,
-                message=payload,
-                push_type=PushType.ALERT
-            )
-            
-            response = await self.client.send_notification(request)
-            
-            if response.is_successful:
-                print(f"✅ Push sent: {title}")
-                return True
-            else:
-                print(f"❌ Push failed: {response.description}")
-                # Log specific error for debugging
-                if "BadDeviceToken" in str(response.description):
-                    print(f"   Token may be invalid or for wrong environment")
-                elif "Unregistered" in str(response.description):
-                    print(f"   Device has unregistered from push notifications")
-                return False
+        }
+        
+        if data:
+            payload.update(data)
+        
+        # Build URL
+        base_url = self.SANDBOX_URL if self._use_sandbox else self.PRODUCTION_URL
+        url = f"{base_url}/3/device/{device_token}"
+        
+        # Headers
+        headers = {
+            "authorization": f"bearer {auth_token}",
+            "apns-topic": self._bundle_id,
+            "apns-push-type": "alert",
+            "apns-priority": "10"
+        }
+        
+        try:
+            async with httpx.AsyncClient(http2=True) as client:
+                response = await client.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=30.0
+                )
                 
+                if response.status_code == 200:
+                    print(f"✅ Push sent: {title}")
+                    return True
+                else:
+                    error_body = response.text
+                    try:
+                        error_json = response.json()
+                        reason = error_json.get("reason", "Unknown")
+                    except:
+                        reason = error_body or f"HTTP {response.status_code}"
+                    
+                    print(f"❌ Push failed: {reason}")
+                    
+                    # Log helpful hints for common errors
+                    if "BadDeviceToken" in reason:
+                        print(f"   Device token may be invalid or for wrong environment")
+                    elif "Unregistered" in reason:
+                        print(f"   Device has unregistered from push notifications")
+                    elif "ExpiredProviderToken" in reason:
+                        print(f"   JWT token expired - will refresh")
+                        self._token = None
+                    
+                    return False
+                    
         except Exception as e:
             print(f"❌ Push error: {e}")
             return False
