@@ -115,6 +115,9 @@ final class BackgroundUploadManager: NSObject {
         // Set processing state
         CaptureProcessingState.shared.startProcessing()
         
+        // Track screenshot sent
+        PostHogSDK.shared.capture("screenshot_sent")
+        
         // Start the upload
         task.resume()
         

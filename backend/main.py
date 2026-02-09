@@ -11,7 +11,7 @@ from datetime import datetime, date
 import time
 from contextlib import asynccontextmanager
 from collections import defaultdict
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, NamedTuple
 
 from fastapi import FastAPI, HTTPException, status, Request, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -108,8 +108,12 @@ openai_service = OpenAIService()
 # The iOS app re-registers device tokens on app launch, so this is acceptable.
 # ============================================
 
-# Device tokens for push notifications: user_id -> device_token
-device_tokens: Dict[str, str] = {}
+# Device tokens for push notifications: user_id -> DeviceInfo(token, is_sandbox)
+class DeviceInfo(NamedTuple):
+    token: str
+    is_sandbox: bool
+
+device_tokens: Dict[str, DeviceInfo] = {}
 
 # Pending jobs for async processing: job_id -> job_data
 pending_jobs: Dict[str, Dict[str, Any]] = {}
@@ -337,10 +341,11 @@ async def register_device(
         print(f"⚠️ Invalid device token length: {len(token)} (expected 64)")
         return {"success": False, "message": "Invalid device token format"}
     
-    device_tokens[body.user_id] = token
+    device_tokens[body.user_id] = DeviceInfo(token=token, is_sandbox=body.is_sandbox)
+    env_type = "sandbox" if body.is_sandbox else "production"
     user_display = body.user_id[:20] + "..." if len(body.user_id) > 20 else body.user_id
     token_display = token[:16] + "..."
-    print(f"📱 Device registered: user={user_display}, token={token_display}")
+    print(f"📱 Device registered ({env_type}): user={user_display}, token={token_display}")
     
     return {"success": True, "message": "Device registered"}
 
@@ -363,9 +368,16 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
     log("Started background processing")
     
     try:
-        # Get device token early
-        device_token = device_tokens.get(user_id)
-        log(f"Device token: {'found' if device_token else 'NOT FOUND'}")
+        # Get device info (token + sandbox flag)
+        device_info = device_tokens.get(user_id)
+        if device_info:
+            device_token = device_info.token
+            use_sandbox = device_info.is_sandbox
+            log(f"Device token: found ({'sandbox' if use_sandbox else 'production'})")
+        else:
+            device_token = None
+            use_sandbox = False
+            log("Device token: NOT FOUND")
         
         # Analyze screenshot with OpenAI
         log("Sending to OpenAI...")
@@ -383,7 +395,7 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
             log("No events found")
             
             if device_token:
-                await apns_service.send_no_events_notification(device_token)
+                await apns_service.send_no_events_notification(device_token, use_sandbox=use_sandbox)
             return
         
         # Success - store result
@@ -401,7 +413,7 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
         
         # Send push notification
         if device_token:
-            success = await apns_service.send_event_created_notification(device_token, analysis_result.events)
+            success = await apns_service.send_event_created_notification(device_token, analysis_result.events, use_sandbox=use_sandbox)
             log(f"Push: {'sent' if success else 'FAILED'}")
         else:
             log("Push: skipped (no device token)")
@@ -419,7 +431,7 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
         
         # Try to send error notification
         if device_token:
-            await apns_service.send_error_notification(device_token, str(e))
+            await apns_service.send_error_notification(device_token, str(e), use_sandbox=use_sandbox)
     
     finally:
         elapsed = time.time() - start_time

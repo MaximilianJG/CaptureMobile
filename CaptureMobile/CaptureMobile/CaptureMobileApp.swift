@@ -150,12 +150,22 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             print("✅ Push: Created \(createdCount) event(s)")
             PostHogSDK.shared.capture("push_events_created", properties: ["count": createdCount])
             
+            // Mark processing complete (clears failure state)
+            CaptureProcessingState.shared.markSuccess()
+            
         case "no_events":
             PostHogSDK.shared.capture("push_no_events")
+            // Clear processing state (completed but no events)
+            CaptureProcessingState.shared.markSuccess()
             
         case "error":
             let error = userInfo["error"] as? String ?? "Unknown"
             PostHogSDK.shared.capture("push_error", properties: ["error": error])
+            // Show failure in UI
+            CaptureProcessingState.shared.stopProcessing()
+            DispatchQueue.main.async {
+                CaptureProcessingState.shared.hasPendingFailure = true
+            }
             
         default:
             break

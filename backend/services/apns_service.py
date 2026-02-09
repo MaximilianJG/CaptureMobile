@@ -149,7 +149,8 @@ class APNsService:
         device_token: str,
         title: str,
         body: str,
-        data: Optional[Dict[str, Any]] = None
+        data: Optional[Dict[str, Any]] = None,
+        use_sandbox: bool = False
     ) -> bool:
         """
         Send a push notification to an iOS device.
@@ -196,8 +197,8 @@ class APNsService:
         if data:
             payload.update(data)
         
-        # Build URL
-        base_url = self.SANDBOX_URL if self._use_sandbox else self.PRODUCTION_URL
+        # Build URL based on per-device sandbox flag
+        base_url = self.SANDBOX_URL if use_sandbox else self.PRODUCTION_URL
         url = f"{base_url}/3/device/{device_token}"
         
         # Headers
@@ -249,6 +250,7 @@ class APNsService:
         self,
         device_token: str,
         events: list,
+        use_sandbox: bool = False,
     ) -> bool:
         """Send notification when events are successfully created."""
         if not events:
@@ -277,26 +279,29 @@ class APNsService:
             device_token=device_token,
             title=title,
             body=body,
-            data={"action": "create_events", "events": events_data}
+            data={"action": "create_events", "events": events_data},
+            use_sandbox=use_sandbox,
         )
     
-    async def send_no_events_notification(self, device_token: str) -> bool:
+    async def send_no_events_notification(self, device_token: str, use_sandbox: bool = False) -> bool:
         """Send notification when no events were found."""
         return await self.send_notification(
             device_token=device_token,
             title="No Events Found",
             body="Couldn't detect events in the screenshot",
-            data={"action": "no_events"}
+            data={"action": "no_events"},
+            use_sandbox=use_sandbox,
         )
     
-    async def send_error_notification(self, device_token: str, error_message: str) -> bool:
+    async def send_error_notification(self, device_token: str, error_message: str, use_sandbox: bool = False) -> bool:
         """Send notification when processing failed."""
         truncated = error_message[:100] + "..." if len(error_message) > 100 else error_message
         return await self.send_notification(
             device_token=device_token,
             title="Capture Failed",
             body=truncated,
-            data={"action": "error", "error": error_message}
+            data={"action": "error", "error": error_message},
+            use_sandbox=use_sandbox,
         )
 
 

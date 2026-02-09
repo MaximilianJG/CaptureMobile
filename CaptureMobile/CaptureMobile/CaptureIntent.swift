@@ -94,6 +94,11 @@ struct CaptureScreenshotIntent: AppIntent {
             // =====================================================
             // FLOW A: Push notifications enabled - use async flow
             // =====================================================
+            
+            // Mark processing started (for failure detection in HomeView)
+            CaptureProcessingState.shared.startProcessing()
+            CaptureProcessingState.shared.markProcessingShown()
+            
             sendNotification(
                 title: "Analyzing Screenshot...",
                 body: "You'll get a notification when done."
@@ -107,6 +112,9 @@ struct CaptureScreenshotIntent: AppIntent {
                 
                 return .result(value: "📸 Analyzing...")
             } else {
+                // Upload failed - clear processing state
+                CaptureProcessingState.shared.stopProcessing()
+                
                 PostHogSDK.shared.capture("shortcut_async_upload_failed")
                 PostHogSDK.shared.flush()
                 
@@ -116,6 +124,11 @@ struct CaptureScreenshotIntent: AppIntent {
             // =====================================================
             // FLOW B: No push - try synchronous with timeout
             // =====================================================
+            
+            // Mark processing started
+            CaptureProcessingState.shared.startProcessing()
+            CaptureProcessingState.shared.markProcessingShown()
+            
             sendNotification(
                 title: "Analyzing Screenshot...",
                 body: "This may take a moment."
@@ -124,6 +137,9 @@ struct CaptureScreenshotIntent: AppIntent {
             do {
                 // Try to complete synchronously
                 let result = try await APIService.shared.analyzeAndCreateEvents(image)
+                
+                // Mark success - clears processing state
+                CaptureProcessingState.shared.markSuccess()
                 
                 PostHogSDK.shared.capture("shortcut_sync_success", properties: [
                     "events_created": result.eventsCreated
@@ -159,6 +175,9 @@ struct CaptureScreenshotIntent: AppIntent {
                 }
                 
             } catch let error as APIService.APIError {
+                // Clear processing, mark as failed
+                CaptureProcessingState.shared.stopProcessing()
+                
                 PostHogSDK.shared.capture("shortcut_sync_failed", properties: [
                     "error": error.localizedDescription
                 ])
@@ -172,6 +191,9 @@ struct CaptureScreenshotIntent: AppIntent {
                 return .result(value: "❌ \(error.localizedDescription)")
                 
             } catch {
+                // Clear processing, mark as failed
+                CaptureProcessingState.shared.stopProcessing()
+                
                 PostHogSDK.shared.capture("shortcut_sync_failed", properties: [
                     "error": error.localizedDescription
                 ])

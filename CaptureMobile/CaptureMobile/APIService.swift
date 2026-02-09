@@ -341,6 +341,9 @@ final class APIService {
     ///   - userID: The user's Apple ID
     /// - Returns: Job ID if upload was accepted, nil if failed
     func uploadScreenshotAsync(_ image: UIImage, userID: String) async -> String? {
+        // Track screenshot sent
+        PostHogSDK.shared.capture("screenshot_sent")
+        
         guard let imageData = image.jpegData(compressionQuality: 0.8) else {
             return nil
         }
@@ -425,12 +428,18 @@ final class APIService {
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         request.timeoutInterval = 15
         
-        let body = ["device_token": token, "user_id": userID]
+        #if DEBUG
+        let isSandbox = true
+        #else
+        let isSandbox = false
+        #endif
+        
+        let body: [String: Any] = ["device_token": token, "user_id": userID, "is_sandbox": isSandbox]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
         do {
             _ = try await URLSession.shared.data(for: request)
-            print("Device token registered successfully")
+            print("Device token registered successfully (sandbox: \(isSandbox))")
         } catch {
             print("Failed to register device token: \(error)")
         }

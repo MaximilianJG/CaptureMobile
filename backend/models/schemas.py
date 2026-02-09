@@ -21,6 +21,7 @@ class RegisterDeviceRequest(BaseModel):
     """Request body for device token registration."""
     user_id: str = Field(..., description="Apple user ID")
     device_token: str = Field(..., description="APNs device token")
+    is_sandbox: bool = Field(default=False, description="True if this is a debug/sandbox build")
 
 
 # ============================================
