@@ -190,7 +190,8 @@ class APNsService:
                 },
                 "sound": "default",
                 "content-available": 1,
-                "mutable-content": 1
+                "mutable-content": 1,
+                "interruption-level": "time-sensitive"
             }
         }
         
@@ -250,9 +251,15 @@ class APNsService:
         self,
         device_token: str,
         events: list,
+        job_id: str,
         use_sandbox: bool = False,
     ) -> bool:
-        """Send notification when events are successfully created."""
+        """Send notification when events are successfully extracted.
+        
+        Only sends the job_id in the payload (not the full events data)
+        to stay well within Apple's 4KB APNS payload limit.
+        The iOS app fetches full event data via /job-status/{job_id}.
+        """
         if not events:
             return False
         
@@ -265,42 +272,32 @@ class APNsService:
             first_title = events[0].title if hasattr(events[0], 'title') else str(events[0].get('title', 'Event'))
             body = f"{first_title} and {len(events) - 1} more"
         
-        # Convert events to dict for payload
-        events_data = []
-        for event in events:
-            if hasattr(event, 'model_dump'):
-                events_data.append(event.model_dump())
-            elif hasattr(event, 'dict'):
-                events_data.append(event.dict())
-            else:
-                events_data.append(event)
-        
         return await self.send_notification(
             device_token=device_token,
             title=title,
             body=body,
-            data={"action": "create_events", "events": events_data},
+            data={"action": "create_events", "job_id": job_id},
             use_sandbox=use_sandbox,
         )
     
-    async def send_no_events_notification(self, device_token: str, use_sandbox: bool = False) -> bool:
+    async def send_no_events_notification(self, device_token: str, job_id: str = "", use_sandbox: bool = False) -> bool:
         """Send notification when no events were found."""
         return await self.send_notification(
             device_token=device_token,
             title="No Events Found",
             body="Couldn't detect events in the screenshot",
-            data={"action": "no_events"},
+            data={"action": "no_events", "job_id": job_id},
             use_sandbox=use_sandbox,
         )
     
-    async def send_error_notification(self, device_token: str, error_message: str, use_sandbox: bool = False) -> bool:
+    async def send_error_notification(self, device_token: str, error_message: str, job_id: str = "", use_sandbox: bool = False) -> bool:
         """Send notification when processing failed."""
         truncated = error_message[:100] + "..." if len(error_message) > 100 else error_message
         return await self.send_notification(
             device_token=device_token,
             title="Capture Failed",
             body=truncated,
-            data={"action": "error", "error": error_message},
+            data={"action": "error", "error": error_message, "job_id": job_id},
             use_sandbox=use_sandbox,
         )
 

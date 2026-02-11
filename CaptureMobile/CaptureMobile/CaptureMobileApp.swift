@@ -24,8 +24,8 @@ struct CaptureMobileApp: App {
         )
         PostHogSDK.shared.setup(config)
         
-        // Request notification permission
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+        // Request notification permission (including time-sensitive for Focus Mode bypass)
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge, .timeSensitive]) { granted, _ in
             if granted {
                 DispatchQueue.main.async {
                     UIApplication.shared.registerForRemoteNotifications()
@@ -118,49 +118,92 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         print("❌ Push registration failed: \(error.localizedDescription)")
     }
     
-    // MARK: - Notification Handling
+    // MARK: - Background Push Handling
+    
+    /// Called when a push notification with content-available:1 arrives while app is in background or terminated.
+    /// This is CRITICAL for processing event creation pushes without requiring the user to tap.
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        Task {
+            await handlePushPayload(userInfo)
+            completionHandler(.newData)
+        }
+    }
+    
+    // MARK: - Notification Handling (Foreground & Tap)
     
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        handlePushPayload(notification.request.content.userInfo)
+        await handlePushPayload(notification.request.content.userInfo)
         return [.banner, .sound]
     }
     
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        handlePushPayload(response.notification.request.content.userInfo)
+        await handlePushPayload(response.notification.request.content.userInfo)
     }
     
-    private func handlePushPayload(_ userInfo: [AnyHashable: Any]) {
+    // MARK: - Push Payload Processing
+    
+    private func handlePushPayload(_ userInfo: [AnyHashable: Any]) async {
         guard let action = userInfo["action"] as? String else { return }
         
         switch action {
         case "create_events":
-            guard let eventsArray = userInfo["events"] as? [[String: Any]] else { return }
+            // Push now only contains job_id (not full event data) to stay within 4KB APNS limit.
+            // Fetch full event data from backend via /job-status/{job_id}.
+            guard let jobID = userInfo["job_id"] as? String else {
+                print("⚠️ Push: create_events without job_id")
+                return
+            }
+            
+            print("📬 Push: Fetching events for job \(jobID.prefix(8))...")
+            
+            guard let jobStatus = await APIService.shared.checkJobStatus(jobID: jobID) else {
+                print("❌ Push: Failed to fetch job \(jobID.prefix(8))")
+                // Save as pending so it can be recovered when app opens
+                PendingJobManager.shared.savePendingJob(jobID: jobID)
+                return
+            }
+            
+            guard jobStatus.status == "completed",
+                  let events = jobStatus.eventsToCreate, !events.isEmpty else {
+                print("⚠️ Push: Job \(jobID.prefix(8)) has no events (status: \(jobStatus.status))")
+                CaptureProcessingState.shared.markSuccess()
+                return
+            }
             
             var createdCount = 0
-            for eventDict in eventsArray {
-                if let eventInfo = parseEventInfo(from: eventDict) {
-                    let calendarEvent = eventInfo.toCalendarEvent()
-                    if let eventID = try? CalendarService.shared.createEvent(calendarEvent) {
-                        CaptureHistoryManager.shared.addCapture(eventInfo, eventID: eventID)
-                        createdCount += 1
-                    }
+            for event in events {
+                let calendarEvent = event.toCalendarEvent()
+                if let eventID = try? CalendarService.shared.createEvent(calendarEvent) {
+                    CaptureHistoryManager.shared.addCapture(event, eventID: eventID)
+                    createdCount += 1
                 }
             }
             
-            print("✅ Push: Created \(createdCount) event(s)")
+            print("✅ Push: Created \(createdCount) event(s) from job \(jobID.prefix(8))")
             PostHogSDK.shared.capture("push_events_created", properties: ["count": createdCount])
+            
+            // Remove from pending jobs (push succeeded, no recovery needed)
+            PendingJobManager.shared.removePendingJob(jobID: jobID)
             
             // Mark processing complete (clears failure state)
             CaptureProcessingState.shared.markSuccess()
             
         case "no_events":
             PostHogSDK.shared.capture("push_no_events")
+            // Remove from pending jobs if job_id present
+            if let jobID = userInfo["job_id"] as? String {
+                PendingJobManager.shared.removePendingJob(jobID: jobID)
+            }
             // Clear processing state (completed but no events)
             CaptureProcessingState.shared.markSuccess()
             
         case "error":
             let error = userInfo["error"] as? String ?? "Unknown"
             PostHogSDK.shared.capture("push_error", properties: ["error": error])
+            // Remove from pending jobs if job_id present
+            if let jobID = userInfo["job_id"] as? String {
+                PendingJobManager.shared.removePendingJob(jobID: jobID)
+            }
             // Show failure in UI
             CaptureProcessingState.shared.stopProcessing()
             DispatchQueue.main.async {
@@ -170,25 +213,5 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         default:
             break
         }
-    }
-    
-    private func parseEventInfo(from dict: [String: Any]) -> APIService.ExtractedEventInfo? {
-        guard let title = dict["title"] as? String,
-              let date = dict["date"] as? String else { return nil }
-        
-        return APIService.ExtractedEventInfo(
-            title: title,
-            date: date,
-            startTime: dict["start_time"] as? String,
-            endTime: dict["end_time"] as? String,
-            location: dict["location"] as? String,
-            description: dict["description"] as? String,
-            timezone: dict["timezone"] as? String,
-            isAllDay: dict["is_all_day"] as? Bool ?? false,
-            isDeadline: dict["is_deadline"] as? Bool ?? false,
-            confidence: dict["confidence"] as? Double ?? 0.5,
-            attendeeName: dict["attendee_name"] as? String,
-            sourceApp: dict["source_app"] as? String
-        )
     }
 }

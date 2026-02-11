@@ -47,8 +47,8 @@ final class CaptureProcessingState: ObservableObject {
     func checkForFailure() {
         if let shownAt = UserDefaults.standard.object(forKey: processingShownKey) as? Date {
             // We showed "Analyzing..." but never got success
-            // If it's been more than 10 seconds, consider it failed
-            if Date().timeIntervalSince(shownAt) > 10 {
+            // Allow 60 seconds for OpenAI processing (5-15s) + APNS transit + background delivery
+            if Date().timeIntervalSince(shownAt) > 60 {
                 DispatchQueue.main.async {
                     self.hasPendingFailure = true
                     self.isProcessing = false
@@ -94,6 +94,7 @@ struct CapturedEvent: Codable, Identifiable {
     let calendarLink: String?
     let sourceApp: String?
     let capturedAt: Date
+    let isAllDay: Bool
     
     /// Creates a CapturedEvent from an ExtractedEventInfo response
     init(from eventInfo: APIService.ExtractedEventInfo, eventID: String? = nil) {
@@ -108,16 +109,31 @@ struct CapturedEvent: Codable, Identifiable {
         self.calendarLink = nil  // EventKit events don't have web links
         self.sourceApp = eventInfo.sourceApp
         self.capturedAt = Date()
+        self.isAllDay = eventInfo.isAllDay
     }
     
     /// Creates a CapturedEvent directly (for testing or direct creation)
-    init(id: String, title: String, startTime: String, calendarLink: String?, sourceApp: String?, capturedAt: Date = Date()) {
+    init(id: String, title: String, startTime: String, calendarLink: String?, sourceApp: String?, capturedAt: Date = Date(), isAllDay: Bool = false) {
         self.id = id
         self.title = title
         self.startTime = startTime
         self.calendarLink = calendarLink
         self.sourceApp = sourceApp
         self.capturedAt = capturedAt
+        self.isAllDay = isAllDay
+    }
+    
+    // Custom decoder for backward compatibility (old captures without isAllDay field)
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        startTime = try container.decode(String.self, forKey: .startTime)
+        calendarLink = try container.decodeIfPresent(String.self, forKey: .calendarLink)
+        sourceApp = try container.decodeIfPresent(String.self, forKey: .sourceApp)
+        capturedAt = try container.decode(Date.self, forKey: .capturedAt)
+        // Default to false for old captures that don't have this field
+        isAllDay = try container.decodeIfPresent(Bool.self, forKey: .isAllDay) ?? false
     }
 }
 
@@ -270,6 +286,22 @@ extension CapturedEvent {
         let displayFormatter = DateFormatter()
         let calendar = Calendar.current
         
+        // For all-day events, show "All day" instead of time
+        if isAllDay {
+            if calendar.isDateInToday(parsedDate) {
+                return "Today, All day"
+            } else if calendar.isDateInTomorrow(parsedDate) {
+                return "Tomorrow, All day"
+            } else if calendar.isDate(parsedDate, equalTo: Date(), toGranularity: .weekOfYear) {
+                displayFormatter.dateFormat = "EEEE"
+                return "\(displayFormatter.string(from: parsedDate)), All day"
+            } else {
+                displayFormatter.dateFormat = "MMM d"
+                return "\(displayFormatter.string(from: parsedDate)), All day"
+            }
+        }
+        
+        // Timed events show the time
         if calendar.isDateInToday(parsedDate) {
             displayFormatter.dateFormat = "'Today,' HH:mm"
         } else if calendar.isDateInTomorrow(parsedDate) {

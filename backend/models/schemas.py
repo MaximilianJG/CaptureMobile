@@ -63,7 +63,8 @@ class JobStatusResponse(BaseModel):
 class ExtractedEventInfo(BaseModel):
     """Event information extracted from screenshot by OpenAI."""
     title: str = Field(..., description="Event title")  # Required
-    date: str = Field(..., description="Event date (YYYY-MM-DD format)")  # Required
+    date: str = Field(..., description="Event start date (YYYY-MM-DD format)")  # Required
+    end_date: Optional[str] = Field(None, description="Event end date for multi-day events (YYYY-MM-DD format). Only set if different from date.")
     start_time: Optional[str] = Field(None, description="Start time (HH:MM format, 24h)")
     end_time: Optional[str] = Field(None, description="End time (HH:MM format, 24h)")
     location: Optional[str] = Field(None, description="Event location if mentioned")

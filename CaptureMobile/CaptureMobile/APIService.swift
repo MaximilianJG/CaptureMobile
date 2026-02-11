@@ -27,8 +27,8 @@ final class APIService {
         case encodingFailed
         case networkError(Error)
         case serverError(Int, String?)
-        case decodingFailed
-        case noEventFound
+        case decodingFailed(String)
+        case noEventFound(String)
         case rateLimited(String)
         case imageTooLarge
         case calendarError(String)
@@ -45,10 +45,10 @@ final class APIService {
                 return "Network error: \(error.localizedDescription)"
             case .serverError(let code, let message):
                 return "Server error (\(code)): \(message ?? "Unknown error")"
-            case .decodingFailed:
-                return "Failed to parse server response"
-            case .noEventFound:
-                return "No event was detected in the screenshot"
+            case .decodingFailed(let detail):
+                return "Failed to parse server response: \(detail)"
+            case .noEventFound(let message):
+                return message
             case .rateLimited(let message):
                 return message
             case .imageTooLarge:
@@ -83,6 +83,7 @@ final class APIService {
     struct ExtractedEventInfo: Codable {
         let title: String
         let date: String
+        let endDate: String?  // For multi-day events (YYYY-MM-DD)
         let startTime: String?
         let endTime: String?
         let location: String?
@@ -97,6 +98,7 @@ final class APIService {
         enum CodingKeys: String, CodingKey {
             case title
             case date
+            case endDate = "end_date"
             case startTime = "start_time"
             case endTime = "end_time"
             case location
@@ -114,6 +116,7 @@ final class APIService {
             return CalendarService.ExtractedEvent(
                 title: title,
                 date: date,
+                endDate: endDate,
                 startTime: startTime,
                 endTime: endTime,
                 location: location,
@@ -249,20 +252,28 @@ final class APIService {
         }
         
         // Decode response
-        let decoder = JSONDecoder()
-        guard let analyzeResponse = try? decoder.decode(AnalyzeResponse.self, from: data) else {
+        let analyzeResponse: AnalyzeResponse
+        do {
+            let decoder = JSONDecoder()
+            analyzeResponse = try decoder.decode(AnalyzeResponse.self, from: data)
+        } catch {
+            let rawBody = String(data: data, encoding: .utf8) ?? "(non-UTF8 data)"
+            print("JSON decode error: \(error)")
+            print("Raw response body: \(rawBody.prefix(500))")
             PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "decoding_failed"
+                "error": "decoding_failed",
+                "details": "\(error)"
             ])
-            throw APIError.decodingFailed
+            throw APIError.decodingFailed("\(error)")
         }
         
         // Check if events were found
         if !analyzeResponse.success || analyzeResponse.eventsToCreate.isEmpty {
             PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "no_events_found"
+                "error": "no_events_found",
+                "backend_message": analyzeResponse.message
             ])
-            throw APIError.noEventFound
+            throw APIError.noEventFound(analyzeResponse.message)
         }
         
         // Create events locally via EventKit
@@ -457,6 +468,7 @@ extension APIService {
                 ExtractedEventInfo(
                     title: "Team Meeting",
                     date: "2026-01-20",
+                    endDate: nil,
                     startTime: "10:00",
                     endTime: "11:00",
                     location: "Conference Room A",
@@ -481,6 +493,7 @@ extension APIService {
                 ExtractedEventInfo(
                     title: "Team Meeting",
                     date: "2026-01-20",
+                    endDate: nil,
                     startTime: "10:00",
                     endTime: "11:00",
                     location: "Conference Room A",
@@ -495,6 +508,7 @@ extension APIService {
                 ExtractedEventInfo(
                     title: "Lunch with Sarah",
                     date: "2026-01-20",
+                    endDate: nil,
                     startTime: "12:30",
                     endTime: "13:30",
                     location: "Cafe Berlin",

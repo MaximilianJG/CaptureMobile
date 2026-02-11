@@ -105,6 +105,11 @@ struct CaptureScreenshotIntent: AppIntent {
             )
             
             if let jobID = await APIService.shared.uploadScreenshotAsync(image, userID: userID) {
+                // Save job_id as pending so it can be recovered if push fails
+                // (e.g., Focus Mode suppresses notification, payload too large, etc.)
+                // PendingJobManager.recoverPendingJobs() will clean it up on next app open.
+                PendingJobManager.shared.savePendingJob(jobID: jobID)
+                
                 PostHogSDK.shared.capture("shortcut_async_upload_success", properties: [
                     "job_id": jobID
                 ])

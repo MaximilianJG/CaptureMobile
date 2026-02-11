@@ -122,7 +122,8 @@ final class CalendarService: ObservableObject {
     /// Event data structure matching backend response
     struct ExtractedEvent {
         let title: String
-        let date: String  // YYYY-MM-DD
+        let date: String  // YYYY-MM-DD (start date)
+        let endDate: String?  // YYYY-MM-DD (end date for multi-day events, nil for single-day)
         let startTime: String?  // HH:MM
         let endTime: String?  // HH:MM
         let location: String?
@@ -188,10 +189,17 @@ final class CalendarService: ObservableObject {
         }
         
         if eventData.isAllDay || eventData.startTime == nil {
-            // All-day event
+            // All-day event (possibly multi-day)
             event.isAllDay = true
             event.startDate = eventDate
-            event.endDate = eventDate
+            
+            // Handle multi-day events: use endDate if provided
+            if let endDateStr = eventData.endDate,
+               let parsedEndDate = dateFormatter.date(from: endDateStr) {
+                event.endDate = parsedEndDate
+            } else {
+                event.endDate = eventDate
+            }
         } else {
             // Timed event
             event.isAllDay = false
@@ -216,8 +224,17 @@ final class CalendarService: ObservableObject {
             event.startDate = startDate
             
             // Parse end time or default to 1 hour
+            // Use endDate for multi-day timed events, otherwise use the same date
+            let endEventDate: Date
+            if let endDateStr = eventData.endDate,
+               let parsedEndDate = dateFormatter.date(from: endDateStr) {
+                endEventDate = parsedEndDate
+            } else {
+                endEventDate = eventDate
+            }
+            
             if let endTime = eventData.endTime {
-                var endComponents = calendar.dateComponents(in: timeZone, from: eventDate)
+                var endComponents = calendar.dateComponents(in: timeZone, from: endEventDate)
                 let timeParts = endTime.split(separator: ":")
                 if timeParts.count >= 2,
                    let hour = Int(timeParts[0]),
@@ -225,8 +242,8 @@ final class CalendarService: ObservableObject {
                     endComponents.hour = hour
                     endComponents.minute = minute
                     
-                    // Handle overnight events
-                    if hour < (startComponents.hour ?? 0) {
+                    // Handle overnight events (only for same-day events)
+                    if endEventDate == eventDate && hour < (startComponents.hour ?? 0) {
                         endComponents.day = (endComponents.day ?? 0) + 1
                     }
                 }

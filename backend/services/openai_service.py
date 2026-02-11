@@ -63,7 +63,7 @@ class OpenAIService:
                                 "type": "image_url",
                                 "image_url": {
                                     "url": base64_image,
-                                    "detail": "auto"  # auto is faster, high only needed for tiny text
+                                    "detail": "high"
                                 }
                             }
                         ]
@@ -81,18 +81,33 @@ class OpenAIService:
             
             # Parse the response
             result_text = response.choices[0].message.content
+            
+            if result_text is None:
+                print("  [OpenAI] ERROR: Response content is None (possibly filtered by content safety)", flush=True)
+                return OpenAIAnalysisResult(
+                    found_events=False,
+                    event_count=0,
+                    events=[],
+                    raw_text="OpenAI error: Response was empty (content may have been filtered by safety system)"
+                )
+            
+            # Log raw GPT-4o response for debugging
+            preview = result_text[:1000] + ('...' if len(result_text) > 1000 else '')
+            print(f"  [OpenAI] Raw response: {preview}", flush=True)
+            
             result_json = json.loads(result_text)
             
             return self._parse_response(result_json)
             
         except Exception as e:
-            print(f"OpenAI analysis error: {str(e)}")
-            # Return empty result on error
+            error_msg = str(e)
+            print(f"  [OpenAI] ANALYSIS ERROR ({type(e).__name__}): {error_msg}", flush=True)
+            # Return result with error info so it can be propagated to the client
             return OpenAIAnalysisResult(
                 found_events=False,
                 event_count=0,
                 events=[],
-                raw_text=f"Analysis failed: {str(e)}"
+                raw_text=f"OpenAI error: {error_msg}"
             )
     
     def _get_system_prompt(self) -> str:
@@ -219,6 +234,14 @@ DO NOT include:
 - Unrelated messages in the screenshot
 - Personal information beyond what's needed for the event
 
+=== MULTI-DAY EVENTS ===
+Some events span multiple days (conferences, trips, festivals, etc.):
+- "Conference Feb 15-17" → date: "2026-02-15", end_date: "2026-02-17", is_all_day: true
+- "Trip March 1-5" → date: "2026-03-01", end_date: "2026-03-05", is_all_day: true
+- "Workshop Feb 20-21, 9am-5pm" → date: "2026-02-20", end_date: "2026-02-21", start_time: "09:00", end_time: "17:00"
+- Single-day events: do NOT set end_date (leave as null)
+- Only set end_date when the event explicitly spans multiple days
+
 === MULTIPLE EVENTS ===
 Screenshots may contain MULTIPLE calendar-worthy items. Look for ALL of them:
 - A list of upcoming appointments or meetings
@@ -243,6 +266,7 @@ Respond ONLY with JSON:
         {{
             "title": "Descriptive Event Title (include person/purpose)",
             "date": "YYYY-MM-DD",
+            "end_date": "YYYY-MM-DD" or null,
             "start_time": "HH:MM" or null,
             "end_time": "HH:MM" or null,
             "location": "Location" or null,
@@ -270,14 +294,16 @@ Be thorough - if there's a date and time mentioned, it probably belongs on a cal
         events_data = result.get("events", [])
         raw_text = result.get("raw_text")
         
+        print(f"  [Parse] GPT-4o returned: found_events={found_events}, events_count={len(events_data)}", flush=True)
+        
         parsed_events: List[ExtractedEventInfo] = []
         
         if found_events and events_data:
-            for event_info_data in events_data:
+            for idx, event_info_data in enumerate(events_data, 1):
                 # Date is required - if missing, skip this event
                 date = event_info_data.get("date")
                 if not date:
-                    print("⚠️ No date found in event info - skipping event")
+                    print(f"  [Parse] Event {idx}: SKIPPED - no date. Raw data: {event_info_data}", flush=True)
                     continue
                 
                 # Title fallback
@@ -293,6 +319,7 @@ Be thorough - if there's a date and time mentioned, it probably belongs on a cal
                     event_info = ExtractedEventInfo(
                         title=title,
                         date=date,
+                        end_date=event_info_data.get("end_date"),
                         start_time=start_time,
                         end_time=event_info_data.get("end_time"),
                         location=event_info_data.get("location"),
@@ -305,13 +332,22 @@ Be thorough - if there's a date and time mentioned, it probably belongs on a cal
                         source_app=event_info_data.get("source_app"),
                     )
                     parsed_events.append(event_info)
+                    print(f"  [Parse] Event {idx}: OK - '{title}' on {date} {start_time or 'all-day'}", flush=True)
                 except Exception as e:
-                    print(f"Failed to parse event info: {e}")
+                    print(f"  [Parse] Event {idx}: VALIDATION FAILED - {type(e).__name__}: {e}", flush=True)
+                    print(f"  [Parse] Event {idx}: Raw data was: {event_info_data}", flush=True)
                     continue
+        elif not found_events:
+            print(f"  [Parse] GPT-4o reported no calendar-worthy events in this screenshot", flush=True)
+        elif not events_data:
+            print(f"  [Parse] GPT-4o said found_events=true but events array is empty!", flush=True)
+        
+        final_count = len(parsed_events)
+        print(f"  [Parse] Final result: {final_count} event(s) parsed successfully", flush=True)
         
         return OpenAIAnalysisResult(
-            found_events=len(parsed_events) > 0,
-            event_count=len(parsed_events),
+            found_events=final_count > 0,
+            event_count=final_count,
             events=parsed_events,
             raw_text=raw_text
         )

@@ -264,11 +264,20 @@ async def analyze_screenshot(
         
         if not analysis_result.found_events or len(analysis_result.events) == 0:
             total_elapsed = time.time() - start_time
-            print(f"[{timestamp}] No events found (total: {total_elapsed:.1f}s)", flush=True)
+            
+            # Distinguish between "no events found" and "analysis error"
+            is_error = analysis_result.raw_text and analysis_result.raw_text.startswith("OpenAI error:")
+            if is_error:
+                print(f"[{timestamp}] ANALYSIS ERROR: {analysis_result.raw_text} (total: {total_elapsed:.1f}s)", flush=True)
+                message = analysis_result.raw_text
+            else:
+                print(f"[{timestamp}] No events found (total: {total_elapsed:.1f}s)", flush=True)
+                message = "No event information found in the screenshot. Please try a clearer image."
+            
             return AnalyzeScreenshotResponse(
                 success=False,
                 events_to_create=[],
-                message="No event information found in the screenshot. Please try a clearer image."
+                message=message
             )
         
         # Log detected events (compact format)
@@ -386,16 +395,29 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
         log(f"OpenAI completed in {elapsed:.1f}s")
         
         if not analysis_result.found_events or len(analysis_result.events) == 0:
-            pending_jobs[job_id] = {
-                "user_id": user_id,
-                "status": "completed",
-                "events": [],
-                "message": "No events found"
-            }
-            log("No events found")
+            # Distinguish between "no events found" and "analysis error"
+            is_error = analysis_result.raw_text and analysis_result.raw_text.startswith("OpenAI error:")
             
-            if device_token:
-                await apns_service.send_no_events_notification(device_token, use_sandbox=use_sandbox)
+            if is_error:
+                log(f"ANALYSIS ERROR: {analysis_result.raw_text}")
+                pending_jobs[job_id] = {
+                    "user_id": user_id,
+                    "status": "failed",
+                    "events": [],
+                    "error": analysis_result.raw_text
+                }
+                if device_token:
+                    await apns_service.send_error_notification(device_token, analysis_result.raw_text, job_id=job_id, use_sandbox=use_sandbox)
+            else:
+                log("No events found")
+                pending_jobs[job_id] = {
+                    "user_id": user_id,
+                    "status": "completed",
+                    "events": [],
+                    "message": "No events found"
+                }
+                if device_token:
+                    await apns_service.send_no_events_notification(device_token, job_id=job_id, use_sandbox=use_sandbox)
             return
         
         # Success - store result
@@ -411,9 +433,9 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
         for idx, event_info in enumerate(analysis_result.events, 1):
             log(f"  {idx}. {event_info.title} | {event_info.date} {event_info.start_time or 'all-day'}")
         
-        # Send push notification
+        # Send push notification (only job_id in payload, not full event data)
         if device_token:
-            success = await apns_service.send_event_created_notification(device_token, analysis_result.events, use_sandbox=use_sandbox)
+            success = await apns_service.send_event_created_notification(device_token, analysis_result.events, job_id=job_id, use_sandbox=use_sandbox)
             log(f"Push: {'sent' if success else 'FAILED'}")
         else:
             log("Push: skipped (no device token)")
@@ -431,7 +453,7 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
         
         # Try to send error notification
         if device_token:
-            await apns_service.send_error_notification(device_token, str(e), use_sandbox=use_sandbox)
+            await apns_service.send_error_notification(device_token, str(e), job_id=job_id, use_sandbox=use_sandbox)
     
     finally:
         elapsed = time.time() - start_time
