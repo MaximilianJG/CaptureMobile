@@ -10,68 +10,93 @@ import Combine
 
 // MARK: - Processing State
 
-/// Tracks whether a capture is currently being processed
-/// Simple logic: if we showed "Analyzing..." but never got a success, it failed
+/// Tracks whether captures are currently being processed.
+/// Supports multiple concurrent jobs: each job is tracked by its ID with a start timestamp.
+/// If a job's timestamp exceeds the timeout without receiving a success callback, it is
+/// considered failed. `isProcessing` is true whenever at least one job is active.
 final class CaptureProcessingState: ObservableObject {
     static let shared = CaptureProcessingState()
     
     @Published var isProcessing: Bool = false
     @Published var hasPendingFailure: Bool = false
     
-    private let processingShownKey = "capture_processing_shown_at"
+    /// Active processing jobs: jobID -> startedAt
+    private var activeJobs: [String: Date] = [:]
+    
+    private let activeJobsKey = "capture_active_jobs"
     private let failureKey = "capture_has_failure"
     
+    /// Timeout for failure detection (seconds).
+    /// Allows for OpenAI processing (5-15s) + APNS transit + background delivery.
+    private let jobTimeoutSeconds: TimeInterval = 60
+    
     private init() {
-        // Check for persisted failure state
+        loadActiveJobs()
         if UserDefaults.standard.bool(forKey: failureKey) {
             hasPendingFailure = true
         }
+        // Derive initial isProcessing from persisted active jobs
+        isProcessing = !activeJobs.isEmpty
     }
     
-    /// Called when we START showing the "Analyzing..." UI
-    func markProcessingShown() {
-        UserDefaults.standard.set(Date(), forKey: processingShownKey)
-    }
+    // MARK: - Public API
     
-    /// Called when a capture is successfully created
-    func markSuccess() {
-        UserDefaults.standard.removeObject(forKey: processingShownKey)
-        DispatchQueue.main.async {
-            self.isProcessing = false
-            self.hasPendingFailure = false
-        }
-        UserDefaults.standard.set(false, forKey: failureKey)
-    }
-    
-    /// Check if we were processing but never got success (called on app appear)
-    func checkForFailure() {
-        if let shownAt = UserDefaults.standard.object(forKey: processingShownKey) as? Date {
-            // We showed "Analyzing..." but never got success
-            // Allow 60 seconds for OpenAI processing (5-15s) + APNS transit + background delivery
-            if Date().timeIntervalSince(shownAt) > 60 {
-                DispatchQueue.main.async {
-                    self.hasPendingFailure = true
-                    self.isProcessing = false
-                }
-                UserDefaults.standard.set(true, forKey: failureKey)
-                UserDefaults.standard.removeObject(forKey: processingShownKey)
-            }
-        }
-    }
-    
-    /// Show the processing spinner
-    func startProcessing() {
+    /// Begin tracking a processing job by its ID.
+    /// Call this when a capture upload succeeds and returns a job ID,
+    /// or with a local tracking ID for synchronous flows.
+    func startProcessing(jobID: String) {
+        activeJobs[jobID] = Date()
+        saveActiveJobs()
         DispatchQueue.main.async {
             self.isProcessing = true
             self.hasPendingFailure = false
         }
     }
     
-    /// Hide the processing spinner
-    func stopProcessing() {
-        DispatchQueue.main.async {
-            self.isProcessing = false
+    /// Called when a capture job is successfully completed.
+    /// Removes the job from active tracking and clears failure state.
+    func markSuccess(jobID: String) {
+        activeJobs.removeValue(forKey: jobID)
+        saveActiveJobs()
+        updateProcessingState()
+        if activeJobs.isEmpty {
+            UserDefaults.standard.set(false, forKey: failureKey)
         }
+    }
+    
+    /// Called when a capture job fails or should stop being tracked.
+    func stopProcessing(jobID: String) {
+        activeJobs.removeValue(forKey: jobID)
+        saveActiveJobs()
+        updateProcessingState()
+    }
+    
+    /// Check all active jobs for timeouts (called on app appear).
+    /// Any job older than `jobTimeoutSeconds` is considered failed.
+    func checkForFailure() {
+        var hasTimeout = false
+        var timedOutJobs: [String] = []
+        
+        for (jobID, startedAt) in activeJobs {
+            if Date().timeIntervalSince(startedAt) > jobTimeoutSeconds {
+                timedOutJobs.append(jobID)
+                hasTimeout = true
+            }
+        }
+        
+        for jobID in timedOutJobs {
+            activeJobs.removeValue(forKey: jobID)
+        }
+        
+        if hasTimeout {
+            saveActiveJobs()
+            DispatchQueue.main.async {
+                self.hasPendingFailure = true
+            }
+            UserDefaults.standard.set(true, forKey: failureKey)
+        }
+        
+        updateProcessingState()
     }
     
     /// Clear the failure card (user dismissed it)
@@ -80,7 +105,47 @@ final class CaptureProcessingState: ObservableObject {
             self.hasPendingFailure = false
         }
         UserDefaults.standard.set(false, forKey: failureKey)
-        UserDefaults.standard.removeObject(forKey: processingShownKey)
+    }
+    
+    /// Number of jobs currently being processed
+    var activeJobCount: Int {
+        return activeJobs.count
+    }
+    
+    // MARK: - Private Helpers
+    
+    private func updateProcessingState() {
+        DispatchQueue.main.async {
+            self.isProcessing = !self.activeJobs.isEmpty
+        }
+    }
+    
+    private func loadActiveJobs() {
+        guard let data = UserDefaults.standard.data(forKey: activeJobsKey) else {
+            // Migrate from old single-timestamp format if present
+            migrateFromLegacy()
+            return
+        }
+        if let jobs = try? JSONDecoder().decode([String: Date].self, from: data) {
+            activeJobs = jobs
+        }
+    }
+    
+    private func saveActiveJobs() {
+        if let data = try? JSONEncoder().encode(activeJobs) {
+            UserDefaults.standard.set(data, forKey: activeJobsKey)
+        }
+    }
+    
+    /// Migrate from the old single-timestamp processing state
+    private func migrateFromLegacy() {
+        let legacyKey = "capture_processing_shown_at"
+        if let legacyDate = UserDefaults.standard.object(forKey: legacyKey) as? Date {
+            // Create a synthetic job ID for the legacy entry
+            activeJobs["legacy-\(UUID().uuidString)"] = legacyDate
+            saveActiveJobs()
+            UserDefaults.standard.removeObject(forKey: legacyKey)
+        }
     }
 }
 

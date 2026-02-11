@@ -95,16 +95,15 @@ struct CaptureScreenshotIntent: AppIntent {
             // FLOW A: Push notifications enabled - use async flow
             // =====================================================
             
-            // Mark processing started (for failure detection in HomeView)
-            CaptureProcessingState.shared.startProcessing()
-            CaptureProcessingState.shared.markProcessingShown()
-            
             sendNotification(
                 title: "Analyzing Screenshot...",
                 body: "You'll get a notification when done."
             )
             
             if let jobID = await APIService.shared.uploadScreenshotAsync(image, userID: userID) {
+                // Track this job for processing state & failure detection
+                CaptureProcessingState.shared.startProcessing(jobID: jobID)
+                
                 // Save job_id as pending so it can be recovered if push fails
                 // (e.g., Focus Mode suppresses notification, payload too large, etc.)
                 // PendingJobManager.recoverPendingJobs() will clean it up on next app open.
@@ -117,22 +116,22 @@ struct CaptureScreenshotIntent: AppIntent {
                 
                 return .result(value: "📸 Analyzing...")
             } else {
-                // Upload failed - clear processing state
-                CaptureProcessingState.shared.stopProcessing()
+                // Upload failed - save for background retry
+                BackgroundUploadManager.shared.enqueue(image: image, userID: userID)
                 
                 PostHogSDK.shared.capture("shortcut_async_upload_failed")
                 PostHogSDK.shared.flush()
                 
-                return .result(value: "❌ Upload failed. Check your connection.")
+                return .result(value: "⏳ Upload queued. It will retry when you open the app.")
             }
         } else {
             // =====================================================
             // FLOW B: No push - try synchronous with timeout
             // =====================================================
             
-            // Mark processing started
-            CaptureProcessingState.shared.startProcessing()
-            CaptureProcessingState.shared.markProcessingShown()
+            // Use a local tracking ID for the sync flow
+            let trackingID = "sync-\(UUID().uuidString)"
+            CaptureProcessingState.shared.startProcessing(jobID: trackingID)
             
             sendNotification(
                 title: "Analyzing Screenshot...",
@@ -143,8 +142,8 @@ struct CaptureScreenshotIntent: AppIntent {
                 // Try to complete synchronously
                 let result = try await APIService.shared.analyzeAndCreateEvents(image)
                 
-                // Mark success - clears processing state
-                CaptureProcessingState.shared.markSuccess()
+                // Mark success - clears processing state for this job
+                CaptureProcessingState.shared.markSuccess(jobID: trackingID)
                 
                 PostHogSDK.shared.capture("shortcut_sync_success", properties: [
                     "events_created": result.eventsCreated
@@ -167,10 +166,13 @@ struct CaptureScreenshotIntent: AppIntent {
                 }
                 
             } catch let error as URLError where error.code == .timedOut {
-                // Timeout - start an async job and save as pending
+                // Timeout - remove sync tracking, start an async job
+                CaptureProcessingState.shared.stopProcessing(jobID: trackingID)
                 PostHogSDK.shared.capture("shortcut_sync_timeout")
                 
                 if let jobID = await APIService.shared.uploadScreenshotAsync(image, userID: userID) {
+                    // Track the real async job instead
+                    CaptureProcessingState.shared.startProcessing(jobID: jobID)
                     PendingJobManager.shared.savePendingJob(jobID: jobID)
                     PostHogSDK.shared.flush()
                     return .result(value: "⏳ Still processing... Open the Capture app to see results.")
@@ -180,8 +182,8 @@ struct CaptureScreenshotIntent: AppIntent {
                 }
                 
             } catch let error as APIService.APIError {
-                // Clear processing, mark as failed
-                CaptureProcessingState.shared.stopProcessing()
+                // Clear processing for this job
+                CaptureProcessingState.shared.stopProcessing(jobID: trackingID)
                 
                 PostHogSDK.shared.capture("shortcut_sync_failed", properties: [
                     "error": error.localizedDescription
@@ -196,8 +198,8 @@ struct CaptureScreenshotIntent: AppIntent {
                 return .result(value: "❌ \(error.localizedDescription)")
                 
             } catch {
-                // Clear processing, mark as failed
-                CaptureProcessingState.shared.stopProcessing()
+                // Clear processing for this job
+                CaptureProcessingState.shared.stopProcessing(jobID: trackingID)
                 
                 PostHogSDK.shared.capture("shortcut_sync_failed", properties: [
                     "error": error.localizedDescription

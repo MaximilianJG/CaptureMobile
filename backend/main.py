@@ -7,6 +7,7 @@ to extract event information. Events are created locally by the iOS app via Even
 
 import os
 import uuid
+import asyncio
 from datetime import datetime, date
 import time
 from contextlib import asynccontextmanager
@@ -42,6 +43,7 @@ RATE_LIMIT_PER_MINUTE = 100      # Global burst limit
 GLOBAL_DAILY_LIMIT = 500         # Total requests per day (hard cost ceiling)
 PER_USER_DAILY_LIMIT = 25        # Requests per user per day
 MAX_IMAGE_SIZE_MB = 10           # Max base64 image size in MB
+MAX_CONCURRENT_OPENAI = 5        # Max concurrent OpenAI API calls (prevents rate limit errors)
 
 # API Key for app authentication
 API_SECRET_KEY = os.getenv("API_SECRET_KEY", "")
@@ -102,6 +104,10 @@ daily_tracker = DailyLimitTracker()
 # Initialize services
 openai_service = OpenAIService()
 
+# Semaphore to limit concurrent OpenAI API calls.
+# Prevents hitting OpenAI rate limits when multiple users capture simultaneously.
+openai_semaphore = asyncio.Semaphore(MAX_CONCURRENT_OPENAI)
+
 # ============================================
 # In-Memory Storage
 # NOTE: These are lost on server restart. For production, use Redis or a database.
@@ -117,6 +123,38 @@ device_tokens: Dict[str, DeviceInfo] = {}
 
 # Pending jobs for async processing: job_id -> job_data
 pending_jobs: Dict[str, Dict[str, Any]] = {}
+
+# TTL for completed/failed jobs before cleanup (seconds)
+JOB_TTL_SECONDS = 3600  # 1 hour
+
+
+def cleanup_expired_jobs():
+    """Remove completed/failed jobs older than JOB_TTL_SECONDS."""
+    now = datetime.utcnow()
+    expired_ids = []
+    
+    for job_id, job_data in pending_jobs.items():
+        job_status = job_data.get("status", "")
+        # Only clean up completed or failed jobs (not processing ones)
+        if job_status in ("completed", "failed"):
+            created_at_str = job_data.get("created_at")
+            if created_at_str:
+                try:
+                    created_at = datetime.strptime(created_at_str, "%Y-%m-%d %H:%M:%S UTC")
+                    if (now - created_at).total_seconds() > JOB_TTL_SECONDS:
+                        expired_ids.append(job_id)
+                except (ValueError, TypeError):
+                    # If timestamp is unparseable and job is done, clean it up
+                    expired_ids.append(job_id)
+            else:
+                # No created_at timestamp on a finished job - use a fallback:
+                # If there's a "completed_at" or just clean it up if status is terminal
+                expired_ids.append(job_id)
+    
+    if expired_ids:
+        for job_id in expired_ids:
+            del pending_jobs[job_id]
+        print(f"🧹 Cleaned up {len(expired_ids)} expired job(s). {len(pending_jobs)} remaining.")
 
 
 # ============================================
@@ -147,6 +185,13 @@ def validate_image_size(image_base64: str):
         )
 
 
+async def periodic_job_cleanup():
+    """Background task that periodically cleans up expired jobs."""
+    while True:
+        await asyncio.sleep(300)  # Run every 5 minutes
+        cleanup_expired_jobs()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -155,8 +200,19 @@ async def lifespan(app: FastAPI):
     print(f"📍 OpenAI configured: {bool(os.getenv('OPENAI_API_KEY'))}")
     print(f"🔐 API Key configured: {bool(API_SECRET_KEY)}")
     print(f"📊 Rate limits: {RATE_LIMIT_PER_MINUTE}/min, {GLOBAL_DAILY_LIMIT}/day global, {PER_USER_DAILY_LIMIT}/day per user")
+    print(f"⚡ Max concurrent OpenAI calls: {MAX_CONCURRENT_OPENAI}")
+    
+    # Start periodic job cleanup task
+    cleanup_task = asyncio.create_task(periodic_job_cleanup())
+    
     yield
+    
     # Shutdown
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     print("👋 Capture Backend shutting down...")
 
 
@@ -255,12 +311,14 @@ async def analyze_screenshot(
                 detail=error_msg
             )
         
-        # Step 2: Analyze screenshot with OpenAI Vision
+        # Step 2: Analyze screenshot with OpenAI Vision (throttled by semaphore)
         openai_start = time.time()
-        print(f"[{timestamp}] Sending to OpenAI...", flush=True)
-        analysis_result = await openai_service.analyze_screenshot(body.image)
-        openai_elapsed = time.time() - openai_start
-        print(f"[{timestamp}] OpenAI completed in {openai_elapsed:.1f}s", flush=True)
+        print(f"[{timestamp}] Waiting for OpenAI slot...", flush=True)
+        async with openai_semaphore:
+            print(f"[{timestamp}] Sending to OpenAI...", flush=True)
+            analysis_result = await openai_service.analyze_screenshot(body.image)
+            openai_elapsed = time.time() - openai_start
+            print(f"[{timestamp}] OpenAI completed in {openai_elapsed:.1f}s", flush=True)
         
         if not analysis_result.found_events or len(analysis_result.events) == 0:
             total_elapsed = time.time() - start_time
@@ -388,11 +446,16 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
             use_sandbox = False
             log("Device token: NOT FOUND")
         
-        # Analyze screenshot with OpenAI
-        log("Sending to OpenAI...")
-        analysis_result = await openai_service.analyze_screenshot(image)
-        elapsed = time.time() - start_time
-        log(f"OpenAI completed in {elapsed:.1f}s")
+        # Analyze screenshot with OpenAI (throttled by semaphore)
+        log("Waiting for OpenAI slot...")
+        async with openai_semaphore:
+            log("Sending to OpenAI...")
+            analysis_result = await openai_service.analyze_screenshot(image)
+            elapsed = time.time() - start_time
+            log(f"OpenAI completed in {elapsed:.1f}s")
+        
+        # Preserve the original created_at for TTL-based cleanup
+        created_at = pending_jobs.get(job_id, {}).get("created_at", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"))
         
         if not analysis_result.found_events or len(analysis_result.events) == 0:
             # Distinguish between "no events found" and "analysis error"
@@ -404,7 +467,8 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
                     "user_id": user_id,
                     "status": "failed",
                     "events": [],
-                    "error": analysis_result.raw_text
+                    "error": analysis_result.raw_text,
+                    "created_at": created_at
                 }
                 if device_token:
                     await apns_service.send_error_notification(device_token, analysis_result.raw_text, job_id=job_id, use_sandbox=use_sandbox)
@@ -414,7 +478,8 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
                     "user_id": user_id,
                     "status": "completed",
                     "events": [],
-                    "message": "No events found"
+                    "message": "No events found",
+                    "created_at": created_at
                 }
                 if device_token:
                     await apns_service.send_no_events_notification(device_token, job_id=job_id, use_sandbox=use_sandbox)
@@ -425,7 +490,8 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
             "user_id": user_id,
             "status": "completed",
             "events": analysis_result.events,
-            "message": f"Found {len(analysis_result.events)} event(s)"
+            "message": f"Found {len(analysis_result.events)} event(s)",
+            "created_at": created_at
         }
         
         # Log detected events
@@ -445,10 +511,12 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
         log(f"ERROR: {str(e)}")
         log(f"Traceback: {traceback.format_exc()}")
         
+        created_at = pending_jobs.get(job_id, {}).get("created_at", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"))
         pending_jobs[job_id] = {
             "user_id": user_id,
             "status": "failed",
-            "error": str(e)
+            "error": str(e),
+            "created_at": created_at
         }
         
         # Try to send error notification
@@ -507,6 +575,9 @@ async def analyze_screenshot_async(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=error_msg
             )
+        
+        # Clean up expired jobs to prevent unbounded memory growth
+        cleanup_expired_jobs()
         
         # Generate job ID and store initial state
         job_id = str(uuid.uuid4())

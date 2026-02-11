@@ -163,8 +163,8 @@ struct HomeView: View {
             .padding(.horizontal, 20)
         }
         .onAppear {
-            // Mark that we showed processing - if success never comes, it's a failure
-            processingState.markProcessingShown()
+            // Timestamps for failure detection are now tracked per-job
+            // in CaptureProcessingState.startProcessing(jobID:)
         }
     }
     

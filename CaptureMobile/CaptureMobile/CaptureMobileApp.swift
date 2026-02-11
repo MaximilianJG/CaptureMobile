@@ -47,9 +47,10 @@ struct CaptureMobileApp: App {
                 // Register device token when app becomes active (handles server restarts)
                 DeviceTokenManager.shared.registerIfNeeded()
                 
-                // Check for pending jobs
+                // Recover pending jobs and retry failed uploads
                 Task {
                     await PendingJobManager.shared.recoverPendingJobs()
+                    await BackgroundUploadManager.shared.processPendingUploads()
                 }
             }
         }
@@ -145,11 +146,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     private func handlePushPayload(_ userInfo: [AnyHashable: Any]) async {
         guard let action = userInfo["action"] as? String else { return }
         
+        // Extract job_id (used by all actions for per-job tracking)
+        let jobID = userInfo["job_id"] as? String
+        
         switch action {
         case "create_events":
             // Push now only contains job_id (not full event data) to stay within 4KB APNS limit.
             // Fetch full event data from backend via /job-status/{job_id}.
-            guard let jobID = userInfo["job_id"] as? String else {
+            guard let jobID = jobID else {
                 print("⚠️ Push: create_events without job_id")
                 return
             }
@@ -166,7 +170,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             guard jobStatus.status == "completed",
                   let events = jobStatus.eventsToCreate, !events.isEmpty else {
                 print("⚠️ Push: Job \(jobID.prefix(8)) has no events (status: \(jobStatus.status))")
-                CaptureProcessingState.shared.markSuccess()
+                CaptureProcessingState.shared.markSuccess(jobID: jobID)
                 return
             }
             
@@ -185,27 +189,24 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             // Remove from pending jobs (push succeeded, no recovery needed)
             PendingJobManager.shared.removePendingJob(jobID: jobID)
             
-            // Mark processing complete (clears failure state)
-            CaptureProcessingState.shared.markSuccess()
+            // Mark processing complete for this specific job
+            CaptureProcessingState.shared.markSuccess(jobID: jobID)
             
         case "no_events":
             PostHogSDK.shared.capture("push_no_events")
-            // Remove from pending jobs if job_id present
-            if let jobID = userInfo["job_id"] as? String {
+            if let jobID = jobID {
                 PendingJobManager.shared.removePendingJob(jobID: jobID)
+                CaptureProcessingState.shared.markSuccess(jobID: jobID)
             }
-            // Clear processing state (completed but no events)
-            CaptureProcessingState.shared.markSuccess()
             
         case "error":
             let error = userInfo["error"] as? String ?? "Unknown"
             PostHogSDK.shared.capture("push_error", properties: ["error": error])
-            // Remove from pending jobs if job_id present
-            if let jobID = userInfo["job_id"] as? String {
+            if let jobID = jobID {
                 PendingJobManager.shared.removePendingJob(jobID: jobID)
+                CaptureProcessingState.shared.stopProcessing(jobID: jobID)
             }
             // Show failure in UI
-            CaptureProcessingState.shared.stopProcessing()
             DispatchQueue.main.async {
                 CaptureProcessingState.shared.hasPendingFailure = true
             }
