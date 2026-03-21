@@ -330,18 +330,17 @@ private struct FailedCaptureRow: View {
 private struct CaptureRow: View {
     let capture: CapturedEvent
     @State private var showingEventDetail = false
+    @State private var showingCaptureDetail = false
     
     var body: some View {
-        Button(action: showEventDetail) {
+        Button(action: handleTap) {
             HStack(spacing: 14) {
-                // Source app icon
                 Image(systemName: capture.eventIcon)
                     .font(.system(size: 16))
                     .foregroundStyle(.white)
                     .frame(width: 32, height: 32)
-                    .background(Color.black, in: RoundedRectangle(cornerRadius: 8))
+                    .background(iconBackground, in: RoundedRectangle(cornerRadius: 8))
                 
-                // Event details
                 VStack(alignment: .leading, spacing: 4) {
                     Text(capture.title)
                         .font(.system(size: 16, weight: .semibold))
@@ -349,9 +348,7 @@ private struct CaptureRow: View {
                         .lineLimit(1)
                     
                     HStack(spacing: 4) {
-                        Text(capture.formattedDate)
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
+                        statusLabel
                         
                         if let sourceApp = capture.sourceApp {
                             Text("·")
@@ -381,15 +378,51 @@ private struct CaptureRow: View {
         .sheet(isPresented: $showingEventDetail) {
             EventDetailSheet(eventIdentifier: capture.id, eventDate: capture.eventDate)
         }
+        .sheet(isPresented: $showingCaptureDetail) {
+            CaptureDetailSheet(capture: capture)
+        }
     }
-    
-    private func showEventDetail() {
-        // Check if event exists before showing sheet
-        if CalendarService.shared.getEvent(withIdentifier: capture.id) != nil {
-            showingEventDetail = true
+
+    private var iconBackground: Color {
+        if capture.status == "processing" { return .orange }
+        if capture.status == "failed" { return .red }
+        if capture.destination == "notion" { return Color(red: 0.4, green: 0.61, blue: 0.74) }
+        return .black
+    }
+
+    @ViewBuilder
+    private var statusLabel: some View {
+        if capture.status == "processing" {
+            HStack(spacing: 4) {
+                ProgressView().scaleEffect(0.6)
+                Text("Processing...")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.orange)
+            }
+        } else if capture.status == "failed" {
+            Text("Failed")
+                .font(.system(size: 14))
+                .foregroundStyle(.red)
+        } else if capture.destination == "notion" {
+            Text("Saved to Notion")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
         } else {
-            // Event not found - fall back to opening Calendar
-            openInCalendar()
+            Text(capture.formattedDate)
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func handleTap() {
+        if capture.isCalendarEvent {
+            if CalendarService.shared.getEvent(withIdentifier: capture.id) != nil {
+                showingEventDetail = true
+            } else {
+                openInCalendar()
+            }
+        } else {
+            showingCaptureDetail = true
         }
     }
     
@@ -400,11 +433,125 @@ private struct CaptureRow: View {
             }
             return
         }
-        
         let timestamp = date.timeIntervalSinceReferenceDate
         if let url = URL(string: "calshow:\(timestamp)") {
             UIApplication.shared.open(url)
         }
+    }
+}
+
+// MARK: - Capture Detail Sheet (for non-calendar captures)
+struct CaptureDetailSheet: View {
+    let capture: CapturedEvent
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    statusBadge
+
+                    if let summary = capture.aiSummary, !summary.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("What AI did")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .textCase(.uppercase)
+
+                            Text(summary)
+                                .font(.system(size: 16))
+                                .foregroundStyle(.primary)
+                        }
+                    }
+
+                    if let originalText = capture.originalText, !originalText.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Original note")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .textCase(.uppercase)
+
+                            Text(originalText)
+                                .font(.system(size: 15))
+                                .foregroundStyle(.primary)
+                                .padding(14)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Details")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+
+                        detailRow(label: "Source", value: capture.captureSource ?? "Unknown")
+                        detailRow(label: "Sent to", value: capture.destination?.capitalized ?? "Processing...")
+                        detailRow(label: "Captured", value: capture.capturedAgo)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+            }
+            .background(Color.white)
+            .navigationTitle(capture.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .preferredColorScheme(.light)
+    }
+
+    @ViewBuilder
+    private var statusBadge: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+            Text(statusText)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(statusColor)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(statusColor.opacity(0.1), in: Capsule())
+    }
+
+    private var statusColor: Color {
+        switch capture.status {
+        case "completed": return .green
+        case "processing": return .orange
+        case "failed": return .red
+        default: return .secondary
+        }
+    }
+
+    private var statusText: String {
+        switch capture.status {
+        case "completed": return "Completed"
+        case "processing": return "Processing..."
+        case "failed": return "Failed"
+        default: return capture.status ?? "Unknown"
+        }
+    }
+
+    private func detailRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 15))
+                .foregroundStyle(.primary)
+        }
+        .padding(.vertical, 4)
     }
 }
 

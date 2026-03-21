@@ -219,29 +219,39 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             PendingJobManager.shared.markJobAsProcessing(jobID)
             
             var createdCount = 0
+            var eventTitles: [String] = []
             for event in events {
                 let calendarEvent = event.toCalendarEvent()
                 if let eventID = try? CalendarService.shared.createEvent(calendarEvent) {
                     CaptureHistoryManager.shared.addCapture(event, eventID: eventID)
+                    eventTitles.append(event.title)
                     createdCount += 1
                 }
             }
+
+            let summary = createdCount == 1
+                ? "Created event: \(eventTitles.first ?? "Event")"
+                : "Created \(createdCount) events: \(eventTitles.joined(separator: ", "))"
+            CaptureHistoryManager.shared.updateCapture(
+                id: jobID, status: "completed", aiSummary: summary, destination: "calendar"
+            )
             
             print("✅ Push: Created \(createdCount) event(s) from job \(jobID.prefix(8))")
             PostHogSDK.shared.capture("push_events_created", properties: ["count": createdCount])
             
-            // Remove from pending jobs (push succeeded, no recovery needed)
             PendingJobManager.shared.removePendingJob(jobID: jobID)
-            
-            // Mark processing complete for this specific job
             CaptureProcessingState.shared.markSuccess(jobID: jobID)
             
         case "no_events":
             PostHogSDK.shared.capture("push_no_events")
             if let jobID = jobID {
-                _ = claimJob(jobID)  // Mark as processed
+                _ = claimJob(jobID)
                 PendingJobManager.shared.removePendingJob(jobID: jobID)
                 CaptureProcessingState.shared.markSuccess(jobID: jobID)
+                CaptureHistoryManager.shared.updateCapture(
+                    id: jobID, status: "completed",
+                    aiSummary: "No calendar events or actionable content found."
+                )
             }
             
         case "notion_saved":
@@ -250,17 +260,28 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                 _ = claimJob(jobID)
                 PendingJobManager.shared.removePendingJob(jobID: jobID)
                 CaptureProcessingState.shared.markSuccess(jobID: jobID)
+
+                let body = userInfo["aps"] as? [String: Any]
+                let alert = body?["alert"] as? [String: Any]
+                let notionBody = alert?["body"] as? String ?? "Saved to Notion"
+
+                CaptureHistoryManager.shared.updateCapture(
+                    id: jobID, status: "completed",
+                    aiSummary: notionBody, destination: "notion"
+                )
             }
 
         case "error":
             let error = userInfo["error"] as? String ?? "Unknown"
             PostHogSDK.shared.capture("push_error", properties: ["error": error])
             if let jobID = jobID {
-                _ = claimJob(jobID)  // Mark as processed
+                _ = claimJob(jobID)
                 PendingJobManager.shared.removePendingJob(jobID: jobID)
                 CaptureProcessingState.shared.stopProcessing(jobID: jobID)
+                CaptureHistoryManager.shared.updateCapture(
+                    id: jobID, status: "failed", aiSummary: "Failed: \(error)"
+                )
             }
-            // Show failure in UI
             DispatchQueue.main.async {
                 CaptureProcessingState.shared.hasPendingFailure = true
             }

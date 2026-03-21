@@ -111,6 +111,14 @@ struct MainTabView: View {
         let text = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
         let source = image != nil ? "camera" : "notes"
 
+        let previewTitle: String = {
+            if !text.isEmpty {
+                let firstLine = text.components(separatedBy: .newlines).first ?? text
+                return String(firstLine.prefix(60))
+            }
+            return "Photo capture"
+        }()
+
         PostHogSDK.shared.capture("capture_sent", properties: [
             "source": source,
             "has_image": image != nil,
@@ -126,6 +134,20 @@ struct MainTabView: View {
             if let jobID = await APIService.shared.uploadCaptureAsync(
                 image: image, text: text.isEmpty ? nil : text, userID: userID, source: source
             ) {
+                let captureEntry = CapturedEvent(
+                    id: jobID,
+                    title: previewTitle,
+                    startTime: {
+                        let f = DateFormatter()
+                        f.dateFormat = "yyyy-MM-dd'T'HH:mm"
+                        return f.string(from: Date())
+                    }(),
+                    captureSource: source,
+                    status: "processing",
+                    originalText: text.isEmpty ? nil : text
+                )
+                CaptureHistoryManager.shared.addCapture(captureEntry)
+
                 CaptureProcessingState.shared.startProcessing(jobID: jobID)
                 PendingJobManager.shared.savePendingJob(jobID: jobID)
             } else if let image {

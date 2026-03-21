@@ -154,31 +154,42 @@ final class CaptureProcessingState: ObservableObject {
 /// Represents a captured event stored in local history
 struct CapturedEvent: Codable, Identifiable {
     let id: String
-    let title: String
+    var title: String
     let startTime: String
     let calendarLink: String?
     let sourceApp: String?
     let capturedAt: Date
     let isAllDay: Bool
+    let captureSource: String?
+    var status: String?
+    var aiSummary: String?
+    var originalText: String?
+    var destination: String?
+
+    var isCalendarEvent: Bool {
+        destination == "calendar" || (destination == nil && captureSource == nil)
+    }
     
     /// Creates a CapturedEvent from an ExtractedEventInfo response
     init(from eventInfo: APIService.ExtractedEventInfo, eventID: String? = nil) {
         self.id = eventID ?? UUID().uuidString
         self.title = eventInfo.title
-        // Build start time string from date and time
         if let time = eventInfo.startTime {
             self.startTime = "\(eventInfo.date)T\(time)"
         } else {
             self.startTime = eventInfo.date
         }
-        self.calendarLink = nil  // EventKit events don't have web links
+        self.calendarLink = nil
         self.sourceApp = eventInfo.sourceApp
         self.capturedAt = Date()
         self.isAllDay = eventInfo.isAllDay
+        self.captureSource = nil
+        self.status = "completed"
+        self.destination = "calendar"
     }
     
-    /// Creates a CapturedEvent directly (for testing or direct creation)
-    init(id: String, title: String, startTime: String, calendarLink: String?, sourceApp: String?, capturedAt: Date = Date(), isAllDay: Bool = false) {
+    /// Creates a CapturedEvent directly
+    init(id: String, title: String, startTime: String, calendarLink: String? = nil, sourceApp: String? = nil, capturedAt: Date = Date(), isAllDay: Bool = false, captureSource: String? = nil, status: String? = "processing", aiSummary: String? = nil, originalText: String? = nil, destination: String? = nil) {
         self.id = id
         self.title = title
         self.startTime = startTime
@@ -186,9 +197,13 @@ struct CapturedEvent: Codable, Identifiable {
         self.sourceApp = sourceApp
         self.capturedAt = capturedAt
         self.isAllDay = isAllDay
+        self.captureSource = captureSource
+        self.status = status
+        self.aiSummary = aiSummary
+        self.originalText = originalText
+        self.destination = destination
     }
     
-    // Custom decoder for backward compatibility (old captures without isAllDay field)
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
@@ -197,8 +212,12 @@ struct CapturedEvent: Codable, Identifiable {
         calendarLink = try container.decodeIfPresent(String.self, forKey: .calendarLink)
         sourceApp = try container.decodeIfPresent(String.self, forKey: .sourceApp)
         capturedAt = try container.decode(Date.self, forKey: .capturedAt)
-        // Default to false for old captures that don't have this field
         isAllDay = try container.decodeIfPresent(Bool.self, forKey: .isAllDay) ?? false
+        captureSource = try container.decodeIfPresent(String.self, forKey: .captureSource)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        aiSummary = try container.decodeIfPresent(String.self, forKey: .aiSummary)
+        originalText = try container.decodeIfPresent(String.self, forKey: .originalText)
+        destination = try container.decodeIfPresent(String.self, forKey: .destination)
     }
 }
 
@@ -226,6 +245,16 @@ final class CaptureHistoryManager: ObservableObject {
         addCapture(capture)
     }
     
+    /// Updates an existing capture's metadata (status, AI summary, destination)
+    func updateCapture(id: String, status: String? = nil, aiSummary: String? = nil, title: String? = nil, destination: String? = nil) {
+        guard let index = recentCaptures.firstIndex(where: { $0.id == id }) else { return }
+        if let status { recentCaptures[index].status = status }
+        if let aiSummary { recentCaptures[index].aiSummary = aiSummary }
+        if let title { recentCaptures[index].title = title }
+        if let destination { recentCaptures[index].destination = destination }
+        saveCaptures()
+    }
+
     /// Adds a captured event to the history
     /// - Parameter capture: The captured event to add
     func addCapture(_ capture: CapturedEvent) {
@@ -404,6 +433,13 @@ extension CapturedEvent {
     
     /// Returns an SF Symbol name based on event title keywords
     var eventIcon: String {
+        if captureSource == "notes" {
+            return "note.text"
+        }
+        if captureSource == "camera" && sourceApp == nil {
+            return "camera.fill"
+        }
+
         let lower = title.lowercased()
 
         if lower.contains("meeting") || lower.contains("standup") || lower.contains("sync") || lower.contains("1:1") || lower.contains("call") {
