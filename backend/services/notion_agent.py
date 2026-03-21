@@ -261,18 +261,32 @@ class NotionAgent:
         """Trim large Notion API responses to stay within token limits."""
         if "results" in data and isinstance(data["results"], list):
             trimmed = []
-            for item in data["results"][:20]:
+            for item in data["results"][:25]:
                 compact = {"id": item.get("id"), "type": item.get("type"), "object": item.get("object")}
+
                 if item.get("type") == "child_page":
                     compact["title"] = item.get("child_page", {}).get("title", "")
                 elif item.get("type") == "child_database":
                     compact["title"] = item.get("child_database", {}).get("title", "")
-                elif "properties" in item:
+
+                if item.get("object") == "page" and "properties" in item:
+                    compact["title"] = self._extract_title(item)
                     compact["properties"] = self._compact_properties(item["properties"])
-                elif "title" in item:
+                elif item.get("object") == "database":
                     compact["title"] = self._extract_plain_text(item.get("title", []))
+                    if "properties" in item:
+                        compact["schema"] = self._compact_db_schema(item["properties"])
+
                 trimmed.append(compact)
             return {"results": trimmed, "has_more": data.get("has_more", False)}
+
+        if data.get("object") == "database" and "properties" in data:
+            return {
+                "id": data["id"],
+                "object": "database",
+                "title": self._extract_plain_text(data.get("title", [])),
+                "schema": self._compact_db_schema(data["properties"]),
+            }
 
         if "properties" in data and "id" in data:
             return {
@@ -280,6 +294,7 @@ class NotionAgent:
                 "object": data.get("object"),
                 "title": self._extract_title(data),
                 "properties": self._compact_properties(data["properties"]),
+                "url": data.get("url"),
             }
 
         if "id" in data:
@@ -287,7 +302,26 @@ class NotionAgent:
 
         return data
 
+    def _compact_db_schema(self, props: dict) -> dict:
+        """Extract database schema with property types and options."""
+        schema = {}
+        for key, val in props.items():
+            prop_type = val.get("type", "")
+            entry = {"type": prop_type}
+
+            if prop_type == "select" and "select" in val:
+                entry["options"] = [o["name"] for o in val["select"].get("options", [])]
+            elif prop_type == "multi_select" and "multi_select" in val:
+                entry["options"] = [o["name"] for o in val["multi_select"].get("options", [])]
+            elif prop_type == "status" and "status" in val:
+                entry["options"] = [o["name"] for o in val["status"].get("options", [])]
+                entry["groups"] = [g["name"] for g in val["status"].get("groups", [])]
+
+            schema[key] = entry
+        return schema
+
     def _compact_properties(self, props: dict) -> dict:
+        """Compact page property values for display."""
         compact = {}
         for key, val in props.items():
             prop_type = val.get("type", "")
@@ -297,15 +331,20 @@ class NotionAgent:
                 compact[key] = {"type": "rich_text", "value": self._extract_plain_text(val.get("rich_text", []))}
             elif prop_type == "select":
                 sel = val.get("select")
-                compact[key] = {"type": "select", "value": sel.get("name") if sel else None, "options": [o["name"] for o in val.get("select", {}).get("options", [])] if isinstance(val.get("select"), dict) and "options" in val.get("select", {}) else []}
+                compact[key] = {"type": "select", "value": sel.get("name") if sel else None}
             elif prop_type == "multi_select":
                 compact[key] = {"type": "multi_select", "values": [s["name"] for s in val.get("multi_select", [])]}
+            elif prop_type == "status":
+                st = val.get("status")
+                compact[key] = {"type": "status", "value": st.get("name") if st else None}
             elif prop_type == "checkbox":
                 compact[key] = {"type": "checkbox", "value": val.get("checkbox")}
             elif prop_type == "number":
                 compact[key] = {"type": "number", "value": val.get("number")}
             elif prop_type == "date":
                 compact[key] = {"type": "date", "value": val.get("date")}
+            elif prop_type == "url":
+                compact[key] = {"type": "url", "value": val.get("url")}
             else:
                 compact[key] = {"type": prop_type}
         return compact
@@ -320,31 +359,69 @@ class NotionAgent:
         return ""
 
     def _build_system_prompt(self, parent_page_id: str, source: str) -> str:
-        return f"""You are a Notion assistant that saves user content to their Notion workspace.
+        return f"""You are an intelligent Notion organizer. The user sends you quick notes, ideas, tasks, lists, or information. Your job is to save it to the RIGHT place in their Notion workspace — exactly like a human assistant who knows their way around the user's Notion.
 
 PARENT PAGE ID: {parent_page_id}
-SOURCE: {source}
 
-WORKFLOW:
-1. First, call notion_get_block_children with the parent page ID to see what sub-pages and databases exist.
-2. If you find a relevant database (e.g. Tasks DB for todos, Shopping List for groceries), call notion_get_database to see its schema, then create items with notion_create_page using parent_type="database_id".
-3. If no matching database exists, create a new page under the parent with notion_create_page using parent_type="page_id".
-4. For lists of items (todos, shopping), create one database item per list entry if a matching DB exists.
-5. Fill in ALL relevant properties. Use titles, tags, dates, checkboxes as the schema allows.
-6. Structure page content with proper block types: headings, bulleted lists, to-do items, paragraphs.
+=== MANDATORY EXPLORATION PHASE ===
+You MUST explore before writing. Never create a new page if a matching database or page already exists.
 
-BLOCK FORMAT EXAMPLES:
+Step 1: Call notion_get_block_children(block_id="{parent_page_id}") to see all children of the parent page.
+Step 2: For EVERY child_database you find, call notion_get_database(database_id=...) to read its schema (columns, property types, select options, etc.).
+Step 3: Also check child pages — they might contain databases nested inside them. If a child page title seems relevant, explore it too with notion_get_block_children.
+Step 4: NOW decide where to put the content based on what you found.
+
+=== DECISION LOGIC ===
+- "buy eggs" → Look for a Shopping List / Groceries database → add item there
+- "todo: fix the bug" → Look for a Tasks / To-Do database → add item with proper status
+- "meeting with John tomorrow 3pm" → This is a calendar event, but if there's a Meetings DB, add it there
+- "new idea: plant trees app" → Look for an Ideas / Notes database → add item. If none exists, create a page under parent.
+- Multiple items in one note (e.g. "buy eggs, milk, bread") → Create ONE item per list entry in the matching database
+- Long-form content → Create a well-structured page with headings and paragraphs
+
+=== WRITING TO DATABASES ===
+When you find a matching database:
+1. Read its schema carefully (notion_get_database)
+2. Map the user's content to the database properties:
+   - Title property → main content
+   - Status/Select → set appropriate value from existing options
+   - Tags/Multi-select → pick relevant existing tags or create new ones
+   - Date → if user mentions a date
+   - Checkbox → for to-do items
+3. Create the page with notion_create_page(parent_type="database_id", parent_id=<db_id>, properties=...)
+4. For multiple items, make SEPARATE notion_create_page calls for each
+
+=== PROPERTY FORMAT FOR DATABASE PAGES ===
+Title: {{"Name": {{"title": [{{"text": {{"content": "Item text"}}}}]}}}}
+Select: {{"Status": {{"select": {{"name": "To Do"}}}}}}
+Multi-select: {{"Tags": {{"multi_select": [{{"name": "groceries"}}]}}}}
+Checkbox: {{"Done": {{"checkbox": false}}}}
+Date: {{"Due": {{"date": {{"start": "2026-03-21"}}}}}}
+Rich text: {{"Notes": {{"rich_text": [{{"text": {{"content": "details"}}}}]}}}}
+
+=== CREATING NEW PAGES (only if no database matches) ===
+Use notion_create_page(parent_type="page_id", parent_id="{parent_page_id}", properties=..., children=...)
+
+Block types for children:
 - Heading: {{"object":"block","type":"heading_2","heading_2":{{"rich_text":[{{"type":"text","text":{{"content":"Title"}}}}]}}}}
 - Paragraph: {{"object":"block","type":"paragraph","paragraph":{{"rich_text":[{{"type":"text","text":{{"content":"Text"}}}}]}}}}
 - Bullet: {{"object":"block","type":"bulleted_list_item","bulleted_list_item":{{"rich_text":[{{"type":"text","text":{{"content":"Item"}}}}]}}}}
 - To-do: {{"object":"block","type":"to_do","to_do":{{"rich_text":[{{"type":"text","text":{{"content":"Task"}}}}],"checked":false}}}}
 
-CONSTRAINTS:
-- ONLY write under the parent page (ID: {parent_page_id}). Do not write elsewhere.
-- Do NOT delete or modify existing content.
-- If unsure where to put something, create a new page under the parent.
+=== CONSTRAINTS ===
+- ONLY write under the parent page or its child databases/pages
+- Do NOT delete or modify existing content
+- Be thorough: fill in every relevant property the database schema offers
+- Prefer existing databases over creating new pages
+- If you create multiple items, confirm each one
 
-When done, respond with a brief summary of what you created and where."""
+=== RESPONSE ===
+When done, respond with a concise summary:
+- What you saved (the content)
+- Where you saved it (database name or page title)
+- How many items you created
+Example: "Added 3 items (eggs, milk, bread) to your Shopping List database."
+"""
 
 
 notion_agent = NotionAgent()
