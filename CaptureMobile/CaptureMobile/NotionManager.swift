@@ -89,6 +89,8 @@ final class NotionManager: NSObject, ObservableObject {
         }
     }
 
+    private var authSession: ASWebAuthenticationSession?
+
     private func startOAuthSession(url: URL) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let session = ASWebAuthenticationSession(
@@ -97,6 +99,7 @@ final class NotionManager: NSObject, ObservableObject {
             ) { [weak self] callbackURL, error in
                 Task { @MainActor in
                     defer { continuation.resume() }
+                    self?.authSession = nil
 
                     if let error {
                         print("Notion OAuth error: \(error)")
@@ -109,6 +112,7 @@ final class NotionManager: NSObject, ObservableObject {
                 }
             }
 
+            self.authSession = session
             session.presentationContextProvider = self
             session.prefersEphemeralWebBrowserSession = false
             session.start()

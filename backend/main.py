@@ -702,37 +702,43 @@ async def get_notion_auth_url(
 @app.get("/notion/callback", tags=["Notion"])
 async def notion_oauth_callback(code: str, state: str):
     """
-    Notion OAuth callback — exchanges the code for an access token
-    and stores it for the user.
+    Notion OAuth callback — exchanges the code for an access token,
+    stores it, then redirects to capture:// so the iOS app can intercept.
     """
     import httpx as httpx_lib
+    from fastapi.responses import RedirectResponse
 
     user_id = state
     if not NOTION_CLIENT_ID or not NOTION_CLIENT_SECRET:
-        raise HTTPException(status_code=500, detail="Notion OAuth not configured")
+        return RedirectResponse(url="capture://notion-callback?error=not_configured")
 
-    async with httpx_lib.AsyncClient() as client:
-        resp = await client.post(
-            "https://api.notion.com/v1/oauth/token",
-            json={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": NOTION_REDIRECT_URI,
-            },
-            auth=(NOTION_CLIENT_ID, NOTION_CLIENT_SECRET),
-        )
+    try:
+        async with httpx_lib.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.notion.com/v1/oauth/token",
+                json={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": NOTION_REDIRECT_URI,
+                },
+                auth=(NOTION_CLIENT_ID, NOTION_CLIENT_SECRET),
+            )
 
-    if resp.status_code != 200:
-        raise HTTPException(status_code=400, detail=f"Notion token exchange failed: {resp.text}")
+        if resp.status_code != 200:
+            return RedirectResponse(url=f"capture://notion-callback?error=token_exchange_failed")
 
-    data = resp.json()
-    notion_save_user(user_id, NotionUserData(
-        access_token=data["access_token"],
-        workspace_name=data.get("workspace_name"),
-        workspace_id=data.get("workspace_id"),
-    ))
+        data = resp.json()
+        notion_save_user(user_id, NotionUserData(
+            access_token=data["access_token"],
+            workspace_name=data.get("workspace_name"),
+            workspace_id=data.get("workspace_id"),
+        ))
 
-    return {"success": True, "workspace_name": data.get("workspace_name")}
+        workspace = quote(data.get("workspace_name", ""), safe="")
+        return RedirectResponse(url=f"capture://notion-callback?success=true&workspace={workspace}")
+
+    except Exception as e:
+        return RedirectResponse(url=f"capture://notion-callback?error={quote(str(e), safe='')}")
 
 
 @app.get("/notion/status", tags=["Notion"])
