@@ -290,6 +290,16 @@ class APNsService:
             use_sandbox=use_sandbox,
         )
     
+    async def send_notion_saved_notification(self, device_token: str, summary: str, job_id: str = "", use_sandbox: bool = False) -> bool:
+        """Send notification when content is saved to Notion."""
+        return await self.send_notification(
+            device_token=device_token,
+            title="Saved to Notion",
+            body=summary[:100],
+            data={"action": "notion_saved", "job_id": job_id},
+            use_sandbox=use_sandbox,
+        )
+
     async def send_error_notification(self, device_token: str, error_message: str, job_id: str = "", use_sandbox: bool = False) -> bool:
         """Send notification when processing failed."""
         truncated = error_message[:100] + "..." if len(error_message) > 100 else error_message

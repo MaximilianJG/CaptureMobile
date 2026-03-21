@@ -15,6 +15,23 @@ class AnalyzeScreenshotRequest(BaseModel):
     """Request body for screenshot analysis endpoint."""
     image: str = Field(..., description="Base64 encoded image data")
     user_id: str = Field(..., description="Apple user ID for rate limiting")
+    source: Optional[str] = Field("screenshot", description="Image source: 'screenshot' or 'camera'")
+    context: Optional[str] = Field(None, description="User-provided context about the image")
+
+
+class AnalyzeCaptureRequest(BaseModel):
+    """Request body for the unified capture endpoint (notes + camera + screenshot)."""
+    image: Optional[str] = Field(None, description="Base64 encoded image data (camera/screenshot)")
+    text: Optional[str] = Field(None, description="Free-form text (notes)")
+    user_id: str = Field(..., description="Apple user ID")
+    source: str = Field("notes", description="Capture source: 'notes', 'camera', or 'screenshot'")
+
+
+class SetNotionParentRequest(BaseModel):
+    """Request body for setting the user's Notion parent page."""
+    user_id: str = Field(..., description="Apple user ID")
+    page_id: str = Field(..., description="Notion page ID to use as parent")
+    page_title: Optional[str] = Field(None, description="Page title for display")
 
 
 class RegisterDeviceRequest(BaseModel):

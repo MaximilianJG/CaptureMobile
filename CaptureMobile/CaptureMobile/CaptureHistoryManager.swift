@@ -402,39 +402,34 @@ extension CapturedEvent {
         }
     }
     
-    /// Returns an SF Symbol name for the source app
-    var sourceAppIcon: String {
-        guard let app = sourceApp?.lowercased() else {
-            return "app.fill"
-        }
-        
-        switch app {
-        case "whatsapp":
-            return "message.fill"
-        case "imessage", "messages":
-            return "message.fill"
-        case "instagram":
-            return "camera.fill"
-        case "gmail", "mail", "outlook":
-            return "envelope.fill"
-        case "linkedin":
+    /// Returns an SF Symbol name based on event title keywords
+    var eventIcon: String {
+        let lower = title.lowercased()
+
+        if lower.contains("meeting") || lower.contains("standup") || lower.contains("sync") || lower.contains("1:1") || lower.contains("call") {
             return "person.2.fill"
-        case "slack":
-            return "number.square.fill"
-        case "microsoft teams", "teams":
-            return "video.fill"
-        case "calendar":
+        } else if lower.contains("lunch") || lower.contains("dinner") || lower.contains("breakfast") || lower.contains("brunch") || lower.contains("food") || lower.contains("restaurant") {
+            return "fork.knife"
+        } else if lower.contains("gym") || lower.contains("workout") || lower.contains("run") || lower.contains("yoga") || lower.contains("sport") || lower.contains("fitness") || lower.contains("training") {
+            return "figure.run"
+        } else if lower.contains("flight") || lower.contains("travel") || lower.contains("trip") || lower.contains("airport") || lower.contains("hotel") {
+            return "airplane"
+        } else if lower.contains("birthday") || lower.contains("party") || lower.contains("celebration") {
+            return "party.popper.fill"
+        } else if lower.contains("doctor") || lower.contains("dentist") || lower.contains("appointment") || lower.contains("hospital") || lower.contains("health") {
+            return "cross.case.fill"
+        } else if lower.contains("class") || lower.contains("lecture") || lower.contains("exam") || lower.contains("study") || lower.contains("school") || lower.contains("university") {
+            return "graduationcap.fill"
+        } else if lower.contains("concert") || lower.contains("show") || lower.contains("festival") || lower.contains("music") || lower.contains("gig") {
+            return "music.note"
+        } else if lower.contains("game") || lower.contains("match") {
+            return "sportscourt.fill"
+        } else if lower.contains("deadline") || lower.contains("due") || lower.contains("submit") {
+            return "clock.fill"
+        } else if lower.contains("interview") {
+            return "briefcase.fill"
+        } else {
             return "calendar"
-        case "notes":
-            return "note.text"
-        case "twitter", "x":
-            return "at"
-        case "messenger", "facebook messenger":
-            return "bubble.left.and.bubble.right.fill"
-        case "telegram":
-            return "paperplane.fill"
-        default:
-            return "app.fill"
         }
     }
 }

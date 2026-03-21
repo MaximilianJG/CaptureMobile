@@ -169,9 +169,8 @@ final class APIService {
     /// Sends a screenshot to the backend for analysis and creates events locally
     /// - Parameter image: The screenshot image to analyze
     /// - Returns: The capture result with created event info
-    func analyzeAndCreateEvents(_ image: UIImage) async throws -> CaptureResult {
-        // Track screenshot sent
-        PostHogSDK.shared.capture("screenshot_sent")
+    func analyzeAndCreateEvents(_ image: UIImage, source: String = "screenshot") async throws -> CaptureResult {
+        PostHogSDK.shared.capture("screenshot_sent", properties: ["source": source])
         
         // Get user ID
         guard let userID = AppleAuthManager.shared.getUserID() else {
@@ -206,12 +205,12 @@ final class APIService {
         
         let body: [String: Any] = [
             "image": base64Image,
-            "user_id": userID
+            "user_id": userID,
+            "source": source
         ]
         
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
-        // Send request
         let data: Data
         let response: URLResponse
         do {
@@ -351,9 +350,8 @@ final class APIService {
     ///   - image: The screenshot image to analyze
     ///   - userID: The user's Apple ID
     /// - Returns: Job ID if upload was accepted, nil if failed
-    func uploadScreenshotAsync(_ image: UIImage, userID: String) async -> String? {
-        // Track screenshot sent
-        PostHogSDK.shared.capture("screenshot_sent")
+    func uploadScreenshotAsync(_ image: UIImage, userID: String, source: String = "screenshot", context: String? = nil) async -> String? {
+        PostHogSDK.shared.capture("screenshot_sent", properties: ["source": source])
         
         guard let imageData = image.jpegData(compressionQuality: 0.8) else {
             return nil
@@ -367,12 +365,16 @@ final class APIService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        request.timeoutInterval = 30  // Short timeout - we just need to queue the job
+        request.timeoutInterval = 30
         
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "image": imageData.base64EncodedString(),
-            "user_id": userID
+            "user_id": userID,
+            "source": source
         ]
+        if let context, !context.isEmpty {
+            body["context"] = context
+        }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
         do {
@@ -392,6 +394,47 @@ final class APIService {
         }
     }
     
+    // MARK: - Unified Capture Upload (Notes + Camera)
+
+    /// Upload a capture (image and/or text) for async processing
+    /// The backend intent layer decides whether it goes to Calendar or Notion
+    func uploadCaptureAsync(image: UIImage?, text: String?, userID: String, source: String = "notes") async -> String? {
+        PostHogSDK.shared.capture("capture_sent", properties: ["source": source])
+
+        guard let url = URL(string: "\(baseURL)/analyze-capture-async") else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 30
+
+        var body: [String: Any] = [
+            "user_id": userID,
+            "source": source
+        ]
+
+        if let image, let imageData = image.jpegData(compressionQuality: 0.8) {
+            body["image"] = imageData.base64EncodedString()
+        }
+        if let text, !text.isEmpty {
+            body["text"] = text
+        }
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else { return nil }
+            let asyncResponse = try JSONDecoder().decode(AsyncUploadResponse.self, from: data)
+            return asyncResponse.success ? asyncResponse.jobId : nil
+        } catch {
+            print("Capture upload failed: \(error)")
+            return nil
+        }
+    }
+
     // MARK: - Job Status (Fallback Recovery)
     
     /// Check the status of a pending job

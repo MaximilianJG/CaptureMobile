@@ -152,7 +152,7 @@ struct CalendarPickerSheet: View {
                 }
                 .padding(.top, 16)
             }
-            .background(Color(.systemGroupedBackground))
+            .background(Color.white)
             .navigationTitle("Select Calendar")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

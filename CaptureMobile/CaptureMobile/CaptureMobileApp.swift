@@ -93,6 +93,11 @@ class DeviceTokenManager {
 
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     
+    /// Thread-safe set of job IDs that have already been processed by handlePushPayload.
+    /// Prevents duplicate event creation when multiple push delegates fire for the same notification.
+    private let processedJobsQueue = DispatchQueue(label: "com.capture.processedJobs")
+    private var processedJobIDs: Set<String> = []
+    
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         
@@ -138,10 +143,29 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
     
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        await handlePushPayload(response.notification.request.content.userInfo)
+        // When user taps a notification, didReceiveRemoteNotification (or willPresent)
+        // has already processed the payload. Skip to avoid duplicate event creation.
     }
     
     // MARK: - Push Payload Processing
+    
+    /// Atomically claims a job ID for processing.
+    /// Returns true if this is the first call for this job (caller should process it).
+    /// Returns false if the job was already claimed (caller should skip).
+    private func claimJob(_ jobID: String) -> Bool {
+        return processedJobsQueue.sync {
+            let (inserted, _) = processedJobIDs.insert(jobID)
+            return inserted
+        }
+    }
+    
+    /// Removes a job ID from the processed set (e.g. if processing failed and
+    /// we want PendingJobManager to retry later).
+    private func unclaimJob(_ jobID: String) {
+        processedJobsQueue.sync {
+            _ = processedJobIDs.remove(jobID)
+        }
+    }
     
     private func handlePushPayload(_ userInfo: [AnyHashable: Any]) async {
         guard let action = userInfo["action"] as? String else { return }
@@ -158,10 +182,26 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                 return
             }
             
+            // Check persistent storage first - handles app restart scenarios where
+            // recovery already processed this job but in-memory set was cleared.
+            guard !PendingJobManager.shared.isJobCompleted(jobID) else {
+                print("⏭️ Push: Job \(jobID.prefix(8)) already completed, skipping")
+                return
+            }
+            
+            // Deduplicate: multiple push delegates can fire for the same notification.
+            // Only the first caller to claim the job will actually process it.
+            guard claimJob(jobID) else {
+                print("⏭️ Push: Job \(jobID.prefix(8)) already being processed, skipping duplicate")
+                return
+            }
+            
             print("📬 Push: Fetching events for job \(jobID.prefix(8))...")
             
             guard let jobStatus = await APIService.shared.checkJobStatus(jobID: jobID) else {
                 print("❌ Push: Failed to fetch job \(jobID.prefix(8))")
+                // Release the claim so PendingJobManager can retry on next app open
+                unclaimJob(jobID)
                 // Save as pending so it can be recovered when app opens
                 PendingJobManager.shared.savePendingJob(jobID: jobID)
                 return
@@ -173,6 +213,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                 CaptureProcessingState.shared.markSuccess(jobID: jobID)
                 return
             }
+            
+            // Mark as completed BEFORE creating events to prevent the recovery
+            // system from racing and creating duplicates.
+            PendingJobManager.shared.markJobAsProcessing(jobID)
             
             var createdCount = 0
             for event in events {
@@ -195,14 +239,24 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         case "no_events":
             PostHogSDK.shared.capture("push_no_events")
             if let jobID = jobID {
+                _ = claimJob(jobID)  // Mark as processed
                 PendingJobManager.shared.removePendingJob(jobID: jobID)
                 CaptureProcessingState.shared.markSuccess(jobID: jobID)
             }
             
+        case "notion_saved":
+            PostHogSDK.shared.capture("push_notion_saved")
+            if let jobID = jobID {
+                _ = claimJob(jobID)
+                PendingJobManager.shared.removePendingJob(jobID: jobID)
+                CaptureProcessingState.shared.markSuccess(jobID: jobID)
+            }
+
         case "error":
             let error = userInfo["error"] as? String ?? "Unknown"
             PostHogSDK.shared.capture("push_error", properties: ["error": error])
             if let jobID = jobID {
+                _ = claimJob(jobID)  // Mark as processed
                 PendingJobManager.shared.removePendingJob(jobID: jobID)
                 CaptureProcessingState.shared.stopProcessing(jobID: jobID)
             }

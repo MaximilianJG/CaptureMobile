@@ -23,12 +23,14 @@ class OpenAIService:
         self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = "gpt-4o"  # GPT-4 with vision capabilities
     
-    async def analyze_screenshot(self, base64_image: str) -> OpenAIAnalysisResult:
+    async def analyze_screenshot(self, base64_image: str, source: str = "screenshot", context: str = None) -> OpenAIAnalysisResult:
         """
-        Analyze a screenshot to extract event information.
+        Analyze a screenshot or photo to extract event information.
         
         Args:
             base64_image: Base64 encoded image string
+            source: Image source - 'screenshot' or 'camera'
+            context: Optional user-provided context about the image
             
         Returns:
             OpenAIAnalysisResult with extracted event info
@@ -36,15 +38,13 @@ class OpenAIService:
         try:
             api_start = time.time()
             
-            # Ensure the base64 string has the proper prefix
             if not base64_image.startswith("data:"):
                 base64_image = f"data:image/jpeg;base64,{base64_image}"
             
-            # Create the analysis prompt
             system_prompt = self._get_system_prompt()
+            user_text = self._get_user_prompt(source, context)
             
-            # Call OpenAI Vision API
-            print(f"  [OpenAI] Calling {self.model} API...", flush=True)
+            print(f"  [OpenAI] Calling {self.model} API... (source: {source})", flush=True)
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -57,7 +57,7 @@ class OpenAIService:
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Analyze this screenshot thoroughly. Look for ALL calendar-worthy events - there may be multiple events in a single screenshot. Examine the ENTIRE image for context - who is involved (sender names, profiles), what each event is about (subject, purpose), and any relevant details. Extract ALL event information and include meaningful context in the title and description of each. Respond with the JSON format specified."
+                                "text": user_text
                             },
                             {
                                 "type": "image_url",
@@ -123,7 +123,7 @@ class OpenAIService:
 TODAY'S DATE: {today_str} ({day_of_week})
 CURRENT YEAR: {current_year}
 
-Your task is to look at screenshots and identify anything that should go on a calendar.
+Your task is to look at images (screenshots OR photos of physical items) and identify anything that should go on a calendar.
 
 === WHAT TO LOOK FOR ===
 - Events, meetings, appointments, scheduled activities
@@ -131,6 +131,9 @@ Your task is to look at screenshots and identify anything that should go on a ca
 - Reminders about time-sensitive actions
 - Reservations, bookings, tickets with dates/times
 - Any date + time combination that someone would want to remember
+- Physical items: flyers, posters, whiteboards, handwritten notes, signs, menus with event info
+- Displays, screens, or monitors showing event information
+- Printed schedules, timetables, or agendas
 
 === EXTRACT THESE DETAILS ===
 - Title/subject
@@ -158,6 +161,7 @@ CONTEXTUAL CLUES:
 - Thread context → why the meeting is happening
 
 SOURCE APP DETECTION (set source_app field):
+- If the image is a photo of a physical item (flyer, poster, whiteboard, sign, etc.) → "Camera"
 - Green chat bubbles, green header → "WhatsApp"
 - Blue chat bubbles (iMessage style) → "iMessage"
 - Instagram DM interface → "Instagram"
@@ -287,6 +291,31 @@ If ONE event is found, event_count should be 1 and events should contain one ite
 If MULTIPLE events are found, event_count should match the array length.
 
 Be thorough - if there's a date and time mentioned, it probably belongs on a calendar!"""
+
+    def _get_user_prompt(self, source: str, context: str = None) -> str:
+        """Get the user prompt based on the image source and optional context."""
+        context_line = ""
+        if context:
+            context_line = f'\n\nThe user provided this additional context: "{context}". Use this to help identify and understand the events in the image.'
+
+        if source == "camera":
+            return (
+                "Analyze this photo thoroughly. It is a photo taken with the phone camera of a "
+                "physical item such as a flyer, poster, whiteboard, handwritten note, sign, display, "
+                "schedule, or screen. Look for ALL calendar-worthy events - there may be multiple events. "
+                "Read any text carefully, including handwritten text. Extract ALL event information and "
+                "include meaningful context in the title and description of each. "
+                "Respond with the JSON format specified."
+                + context_line
+            )
+        return (
+            "Analyze this screenshot thoroughly. Look for ALL calendar-worthy events - there may be "
+            "multiple events in a single screenshot. Examine the ENTIRE image for context - who is "
+            "involved (sender names, profiles), what each event is about (subject, purpose), and any "
+            "relevant details. Extract ALL event information and include meaningful context in the "
+            "title and description of each. Respond with the JSON format specified."
+            + context_line
+        )
     
     def _parse_response(self, result: dict) -> OpenAIAnalysisResult:
         """Parse the OpenAI response into our schema - supports multiple events."""
@@ -352,6 +381,104 @@ Be thorough - if there's a date and time mentioned, it probably belongs on a cal
             raw_text=raw_text
         )
     
+    async def analyze_text_for_events(self, text: str, source: str = "notes") -> OpenAIAnalysisResult:
+        """
+        Analyze free-form text to extract calendar events (no image).
+        """
+        try:
+            system_prompt = self._get_system_prompt()
+            user_text = (
+                f"The user typed the following text (source: {source}). "
+                "Extract ALL calendar-worthy events from it. "
+                "Respond with the JSON format specified.\n\n"
+                f"---\n{text}\n---"
+            )
+
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text},
+                ],
+                max_tokens=2000,
+                response_format={"type": "json_object"},
+            )
+
+            result_text = response.choices[0].message.content
+            if result_text is None:
+                return OpenAIAnalysisResult(
+                    found_events=False, event_count=0, events=[],
+                    raw_text="OpenAI error: Response was empty",
+                )
+
+            result_json = json.loads(result_text)
+            return self._parse_response(result_json)
+
+        except Exception as e:
+            print(f"  [OpenAI] Text analysis error: {e}", flush=True)
+            return OpenAIAnalysisResult(
+                found_events=False, event_count=0, events=[],
+                raw_text=f"OpenAI error: {str(e)}",
+            )
+
+    async def classify_intent(self, base64_image: str = None, text: str = None, source: str = "notes") -> dict:
+        """
+        Classify whether content should go to Calendar or Notion.
+
+        Returns: {"intent": "calendar"|"notion", "confidence": 0.0-1.0}
+        """
+        try:
+            now = datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+            day_of_week = now.strftime("%A")
+
+            system = f"""You classify user captures into one of two destinations.
+
+TODAY: {today_str} ({day_of_week})
+
+RULES:
+- "calendar": Content describes specific events, meetings, appointments, deadlines, reservations, or anything with a date+time that belongs on a calendar.
+- "notion": Content is notes, to-do lists, shopping lists, ideas, information to save, reference material, study notes, or anything meant for storage/organization rather than a specific calendar slot.
+
+When in doubt:
+- If there is a clear date/time for a scheduled event → calendar
+- If it is a list of items, tasks, or free-form text → notion
+- Source "notes" (typed text) leans toward notion unless it clearly describes calendar events
+- Source "camera"/"screenshot" can be either — look at the actual content
+
+Respond ONLY with JSON: {{"intent": "calendar" or "notion", "confidence": 0.0-1.0}}"""
+
+            messages = [{"role": "system", "content": system}]
+            user_content = []
+
+            if text:
+                user_content.append({"type": "text", "text": f"User's capture (source: {source}):\n\n{text}"})
+            else:
+                user_content.append({"type": "text", "text": f"Classify this image capture (source: {source})."})
+
+            if base64_image:
+                img_url = base64_image if base64_image.startswith("data:") else f"data:image/jpeg;base64,{base64_image}"
+                user_content.append({"type": "image_url", "image_url": {"url": img_url, "detail": "low"}})
+
+            messages.append({"role": "user", "content": user_content})
+
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=100,
+                response_format={"type": "json_object"}
+            )
+
+            result = json.loads(response.choices[0].message.content)
+            intent = result.get("intent", "notion")
+            confidence = result.get("confidence", 0.5)
+            print(f"  [Intent] Classified as '{intent}' (confidence: {confidence})", flush=True)
+            return {"intent": intent, "confidence": confidence}
+
+        except Exception as e:
+            print(f"  [Intent] Classification failed: {e}, defaulting to 'notion'", flush=True)
+            return {"intent": "notion", "confidence": 0.3}
+
     async def extract_text_only(self, base64_image: str) -> str:
         """
         Extract only the text content from an image without event parsing.

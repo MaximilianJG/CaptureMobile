@@ -79,7 +79,7 @@ struct AuthView: View {
                         
                         if let error = authManager.errorMessage {
                             Text(error)
-                                .font(.footnote)
+                                .font(.system(size: 13))
                                 .foregroundStyle(.red)
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 32)

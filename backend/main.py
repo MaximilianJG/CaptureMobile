@@ -24,6 +24,8 @@ from dotenv import load_dotenv
 from models.schemas import (
     AnalyzeScreenshotRequest,
     AnalyzeScreenshotResponse,
+    AnalyzeCaptureRequest,
+    SetNotionParentRequest,
     HealthResponse,
     RegisterDeviceRequest,
     AsyncAnalyzeResponse,
@@ -32,6 +34,14 @@ from models.schemas import (
 )
 from services.openai_service import OpenAIService
 from services.apns_service import apns_service
+from services.notion_agent import notion_agent
+from models.notion_store import (
+    get_user as notion_get_user,
+    save_user as notion_save_user,
+    delete_user as notion_delete_user,
+    user_has_notion,
+    NotionUserData,
+)
 
 # Load environment variables
 load_dotenv()
@@ -47,6 +57,11 @@ MAX_CONCURRENT_OPENAI = 5        # Max concurrent OpenAI API calls (prevents rat
 
 # API Key for app authentication
 API_SECRET_KEY = os.getenv("API_SECRET_KEY", "")
+
+# Notion OAuth configuration
+NOTION_CLIENT_ID = os.getenv("NOTION_CLIENT_ID", "")
+NOTION_CLIENT_SECRET = os.getenv("NOTION_CLIENT_SECRET", "")
+NOTION_REDIRECT_URI = os.getenv("NOTION_REDIRECT_URI", "")
 
 # ============================================
 # Rate Limiting Setup
@@ -312,11 +327,13 @@ async def analyze_screenshot(
             )
         
         # Step 2: Analyze screenshot with OpenAI Vision (throttled by semaphore)
+        source = body.source or "screenshot"
+        context = body.context
         openai_start = time.time()
-        print(f"[{timestamp}] Waiting for OpenAI slot...", flush=True)
+        print(f"[{timestamp}] Waiting for OpenAI slot... (source: {source}, context: {bool(context)})", flush=True)
         async with openai_semaphore:
             print(f"[{timestamp}] Sending to OpenAI...", flush=True)
-            analysis_result = await openai_service.analyze_screenshot(body.image)
+            analysis_result = await openai_service.analyze_screenshot(body.image, source=source, context=context)
             openai_elapsed = time.time() - openai_start
             print(f"[{timestamp}] OpenAI completed in {openai_elapsed:.1f}s", flush=True)
         
@@ -421,7 +438,7 @@ async def register_device(
 # Async Screenshot Analysis (Push Notification Flow)
 # ============================================
 
-async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
+async def process_screenshot_and_notify(job_id: str, image: str, user_id: str, source: str = "screenshot", context: str = None):
     """
     Background task: Process screenshot and send push notification when done.
     """
@@ -447,10 +464,10 @@ async def process_screenshot_and_notify(job_id: str, image: str, user_id: str):
             log("Device token: NOT FOUND")
         
         # Analyze screenshot with OpenAI (throttled by semaphore)
-        log("Waiting for OpenAI slot...")
+        log(f"Waiting for OpenAI slot... (source: {source}, context: {bool(context)})")
         async with openai_semaphore:
             log("Sending to OpenAI...")
-            analysis_result = await openai_service.analyze_screenshot(image)
+            analysis_result = await openai_service.analyze_screenshot(image, source=source, context=context)
             elapsed = time.time() - start_time
             log(f"OpenAI completed in {elapsed:.1f}s")
         
@@ -579,6 +596,9 @@ async def analyze_screenshot_async(
         # Clean up expired jobs to prevent unbounded memory growth
         cleanup_expired_jobs()
         
+        source = body.source or "screenshot"
+        context = body.context
+        
         # Generate job ID and store initial state
         job_id = str(uuid.uuid4())
         pending_jobs[job_id] = {
@@ -592,7 +612,9 @@ async def analyze_screenshot_async(
             process_screenshot_and_notify,
             job_id=job_id,
             image=body.image,
-            user_id=user_id
+            user_id=user_id,
+            source=source,
+            context=context
         )
         
         print(f"[{timestamp}] Job queued: {job_id[:8]}...", flush=True)
@@ -645,6 +667,376 @@ async def get_job_status(
         status=job.get("status", "unknown"),
         events_to_create=job.get("events"),
         error=job.get("error")
+    )
+
+
+# ============================================
+# Notion OAuth
+# ============================================
+
+@app.get("/notion/auth-url", tags=["Notion"])
+async def get_notion_auth_url(
+    user_id: str,
+    _: None = Depends(verify_api_key),
+):
+    """Return the Notion OAuth authorization URL for the user."""
+    if not NOTION_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Notion OAuth not configured")
+
+    url = (
+        f"https://api.notion.com/v1/oauth/authorize"
+        f"?client_id={NOTION_CLIENT_ID}"
+        f"&response_type=code"
+        f"&owner=user"
+        f"&redirect_uri={NOTION_REDIRECT_URI}"
+        f"&state={user_id}"
+    )
+    return {"url": url}
+
+
+@app.get("/notion/callback", tags=["Notion"])
+async def notion_oauth_callback(code: str, state: str):
+    """
+    Notion OAuth callback — exchanges the code for an access token
+    and stores it for the user.
+    """
+    import httpx as httpx_lib
+
+    user_id = state
+    if not NOTION_CLIENT_ID or not NOTION_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Notion OAuth not configured")
+
+    async with httpx_lib.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.notion.com/v1/oauth/token",
+            json={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": NOTION_REDIRECT_URI,
+            },
+            auth=(NOTION_CLIENT_ID, NOTION_CLIENT_SECRET),
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=400, detail=f"Notion token exchange failed: {resp.text}")
+
+    data = resp.json()
+    notion_save_user(user_id, NotionUserData(
+        access_token=data["access_token"],
+        workspace_name=data.get("workspace_name"),
+        workspace_id=data.get("workspace_id"),
+    ))
+
+    return {"success": True, "workspace_name": data.get("workspace_name")}
+
+
+@app.get("/notion/status", tags=["Notion"])
+async def notion_status(
+    user_id: str,
+    _: None = Depends(verify_api_key),
+):
+    """Check if a user has connected Notion."""
+    user_data = notion_get_user(user_id)
+    if not user_data:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "workspace_name": user_data.workspace_name,
+        "parent_page_id": user_data.parent_page_id,
+        "parent_page_title": user_data.parent_page_title,
+    }
+
+
+@app.post("/notion/set-parent", tags=["Notion"])
+async def set_notion_parent(
+    body: SetNotionParentRequest,
+    _: None = Depends(verify_api_key),
+):
+    """Set the Notion parent page for a user."""
+    user_data = notion_get_user(body.user_id)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User has not connected Notion")
+
+    user_data.parent_page_id = body.page_id
+    user_data.parent_page_title = body.page_title
+    notion_save_user(body.user_id, user_data)
+
+    return {"success": True}
+
+
+@app.post("/notion/disconnect", tags=["Notion"])
+async def disconnect_notion(
+    user_id: str,
+    _: None = Depends(verify_api_key),
+):
+    """Disconnect Notion for a user."""
+    notion_delete_user(user_id)
+    return {"success": True}
+
+
+@app.get("/notion/pages", tags=["Notion"])
+async def list_notion_pages(
+    user_id: str,
+    _: None = Depends(verify_api_key),
+):
+    """List top-level pages from user's Notion workspace for parent page selection."""
+    import httpx as httpx_lib
+
+    user_data = notion_get_user(user_id)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User has not connected Notion")
+
+    async with httpx_lib.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.notion.com/v1/search",
+            headers={
+                "Authorization": f"Bearer {user_data.access_token}",
+                "Notion-Version": "2022-06-28",
+            },
+            json={"filter": {"property": "object", "value": "page"}, "page_size": 50},
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=400, detail="Failed to list Notion pages")
+
+    results = resp.json().get("results", [])
+    pages = []
+    for page in results:
+        title_parts = page.get("properties", {}).get("title", {}).get("title", [])
+        title = "".join(t.get("plain_text", "") for t in title_parts) if title_parts else "Untitled"
+        pages.append({"id": page["id"], "title": title})
+
+    return {"pages": pages}
+
+
+# ============================================
+# Unified Capture Endpoint (Notes + Camera)
+# ============================================
+
+async def process_capture_and_notify(
+    job_id: str, image: Optional[str], text: Optional[str],
+    user_id: str, source: str
+):
+    """
+    Background task: Classify intent, then route to Calendar (existing) or Notion agent.
+    """
+    job_short = job_id[:8]
+    start_time = time.time()
+
+    def log(msg: str):
+        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        print(f"[{ts}] [{job_short}] {msg}", flush=True)
+
+    log(f"Started capture processing (source: {source})")
+
+    device_info = device_tokens.get(user_id)
+    device_token = device_info.token if device_info else None
+    use_sandbox = device_info.is_sandbox if device_info else False
+
+    created_at = pending_jobs.get(job_id, {}).get(
+        "created_at", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    )
+
+    try:
+        # Step 1: Intent classification
+        intent_result = await openai_service.classify_intent(
+            base64_image=image, text=text, source=source
+        )
+        intent = intent_result["intent"]
+        log(f"Intent: {intent} (confidence: {intent_result['confidence']})")
+
+        # Step 2: Route
+        if intent == "calendar":
+            if image:
+                log("Routing to calendar (image)")
+                async with openai_semaphore:
+                    analysis_result = await openai_service.analyze_screenshot(
+                        image, source=source, context=text
+                    )
+
+                if not analysis_result.found_events or not analysis_result.events:
+                    pending_jobs[job_id] = {
+                        "user_id": user_id, "status": "completed",
+                        "events": [], "message": "No events found", "created_at": created_at,
+                    }
+                    if device_token:
+                        await apns_service.send_no_events_notification(
+                            device_token, job_id=job_id, use_sandbox=use_sandbox
+                        )
+                    return
+
+                pending_jobs[job_id] = {
+                    "user_id": user_id, "status": "completed",
+                    "events": analysis_result.events,
+                    "message": f"Found {len(analysis_result.events)} event(s)",
+                    "created_at": created_at,
+                }
+                if device_token:
+                    await apns_service.send_event_created_notification(
+                        device_token, analysis_result.events,
+                        job_id=job_id, use_sandbox=use_sandbox
+                    )
+            else:
+                log("Routing to calendar (text-only)")
+                async with openai_semaphore:
+                    analysis_result = await openai_service.analyze_text_for_events(text, source=source)
+
+                if not analysis_result.found_events or not analysis_result.events:
+                    pending_jobs[job_id] = {
+                        "user_id": user_id, "status": "completed",
+                        "events": [], "message": "No events found", "created_at": created_at,
+                    }
+                    if device_token:
+                        await apns_service.send_no_events_notification(
+                            device_token, job_id=job_id, use_sandbox=use_sandbox
+                        )
+                    return
+
+                pending_jobs[job_id] = {
+                    "user_id": user_id, "status": "completed",
+                    "events": analysis_result.events,
+                    "message": f"Found {len(analysis_result.events)} event(s)",
+                    "created_at": created_at,
+                }
+                if device_token:
+                    await apns_service.send_event_created_notification(
+                        device_token, analysis_result.events,
+                        job_id=job_id, use_sandbox=use_sandbox
+                    )
+
+        elif intent == "notion":
+            notion_user = notion_get_user(user_id)
+            if not notion_user or not notion_user.parent_page_id:
+                log("Notion not configured — falling back to calendar flow")
+                if image:
+                    async with openai_semaphore:
+                        analysis_result = await openai_service.analyze_screenshot(
+                            image, source=source, context=text
+                        )
+                    events = analysis_result.events if analysis_result.found_events else []
+                else:
+                    async with openai_semaphore:
+                        analysis_result = await openai_service.analyze_text_for_events(text, source=source)
+                    events = analysis_result.events if analysis_result.found_events else []
+
+                pending_jobs[job_id] = {
+                    "user_id": user_id, "status": "completed",
+                    "events": events,
+                    "message": f"Found {len(events)} event(s) (Notion not configured)",
+                    "created_at": created_at,
+                }
+                if device_token and events:
+                    await apns_service.send_event_created_notification(
+                        device_token, events, job_id=job_id, use_sandbox=use_sandbox
+                    )
+                elif device_token:
+                    await apns_service.send_no_events_notification(
+                        device_token, job_id=job_id, use_sandbox=use_sandbox
+                    )
+                return
+
+            content_for_agent = text or ""
+            if image:
+                async with openai_semaphore:
+                    extracted = await openai_service.extract_text_only(image)
+                content_for_agent = f"{content_for_agent}\n\n[Image content]: {extracted}".strip()
+
+            log(f"Routing to Notion agent (parent: {notion_user.parent_page_id[:12]}...)")
+            result = await notion_agent.execute(
+                access_token=notion_user.access_token,
+                parent_page_id=notion_user.parent_page_id,
+                content=content_for_agent,
+                source=source,
+            )
+
+            pending_jobs[job_id] = {
+                "user_id": user_id,
+                "status": "completed" if result["success"] else "failed",
+                "events": [],
+                "notion_result": result,
+                "message": result["summary"],
+                "created_at": created_at,
+            }
+
+            if device_token:
+                if result["success"]:
+                    await apns_service.send_notion_saved_notification(
+                        device_token, result["summary"],
+                        job_id=job_id, use_sandbox=use_sandbox
+                    )
+                else:
+                    await apns_service.send_error_notification(
+                        device_token, result["summary"],
+                        job_id=job_id, use_sandbox=use_sandbox
+                    )
+
+    except Exception as e:
+        import traceback
+        log(f"ERROR: {e}")
+        log(f"Traceback: {traceback.format_exc()}")
+        pending_jobs[job_id] = {
+            "user_id": user_id, "status": "failed",
+            "error": str(e), "created_at": created_at,
+        }
+        if device_token:
+            await apns_service.send_error_notification(
+                device_token, str(e), job_id=job_id, use_sandbox=use_sandbox
+            )
+    finally:
+        elapsed = time.time() - start_time
+        log(f"Completed in {elapsed:.1f}s")
+
+
+@app.post(
+    "/analyze-capture-async",
+    response_model=AsyncAnalyzeResponse,
+    tags=["Capture"],
+)
+@limiter.limit(f"{RATE_LIMIT_PER_MINUTE}/minute")
+async def analyze_capture_async(
+    request: Request,
+    body: AnalyzeCaptureRequest,
+    background_tasks: BackgroundTasks,
+    _: None = Depends(verify_api_key),
+):
+    """
+    Unified capture endpoint — accepts image and/or text.
+    Intent layer routes to Calendar or Notion automatically.
+    """
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(f"\n[{timestamp}] === NEW UNIFIED CAPTURE REQUEST ===", flush=True)
+
+    if not body.image and not body.text:
+        raise HTTPException(status_code=400, detail="Either image or text is required")
+
+    if body.image:
+        validate_image_size(body.image)
+
+    allowed, error_msg = daily_tracker.check_and_increment(body.user_id)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=error_msg)
+
+    cleanup_expired_jobs()
+
+    job_id = str(uuid.uuid4())
+    pending_jobs[job_id] = {
+        "user_id": body.user_id, "status": "processing", "created_at": timestamp
+    }
+
+    background_tasks.add_task(
+        process_capture_and_notify,
+        job_id=job_id,
+        image=body.image,
+        text=body.text,
+        user_id=body.user_id,
+        source=body.source,
+    )
+
+    print(f"[{timestamp}] Job queued: {job_id[:8]}...", flush=True)
+
+    return AsyncAnalyzeResponse(
+        success=True, job_id=job_id,
+        message="Processing started. You'll receive a notification when complete.",
     )
 
 

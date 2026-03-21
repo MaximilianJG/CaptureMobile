@@ -59,6 +59,16 @@ class AppleAuthManager: NSObject, ObservableObject {
     func getUserID() -> String? {
         return keychain.readString(forKey: .appleUserID)
     }
+
+    // MARK: - Update Profile
+    @MainActor
+    func updateName(_ newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let user = currentUser else { return }
+        _ = keychain.save(trimmed, forKey: .userName)
+        currentUser = UserProfile(userID: user.userID, email: user.email, name: trimmed)
+        PostHogSDK.shared.capture("profile_name_updated")
+    }
     
     // MARK: - Check Credential State
     private func checkCredentialState(userID: String) {
