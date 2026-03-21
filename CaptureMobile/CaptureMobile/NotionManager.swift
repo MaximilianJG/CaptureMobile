@@ -32,10 +32,15 @@ final class NotionManager: NSObject, ObservableObject {
         super.init()
     }
 
+    private func encodedUserID() -> String? {
+        guard let uid = AppleAuthManager.shared.getUserID() else { return nil }
+        return uid.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+    }
+
     // MARK: - Check Status
 
     func checkStatus() async {
-        guard let userID = AppleAuthManager.shared.getUserID() else { return }
+        guard let userID = encodedUserID() else { return }
 
         guard let url = URL(string: "\(baseURL)/notion/status?user_id=\(userID)") else { return }
         var request = URLRequest(url: url)
@@ -57,7 +62,7 @@ final class NotionManager: NSObject, ObservableObject {
     // MARK: - OAuth Connect
 
     func connect() async {
-        guard let userID = AppleAuthManager.shared.getUserID() else { return }
+        guard let userID = encodedUserID() else { return }
         isLoading = true
 
         guard let url = URL(string: "\(baseURL)/notion/auth-url?user_id=\(userID)") else {
@@ -113,7 +118,7 @@ final class NotionManager: NSObject, ObservableObject {
     // MARK: - Disconnect
 
     func disconnect() async {
-        guard let userID = AppleAuthManager.shared.getUserID() else { return }
+        guard let userID = encodedUserID() else { return }
 
         guard let url = URL(string: "\(baseURL)/notion/disconnect?user_id=\(userID)") else { return }
         var request = URLRequest(url: url)
@@ -131,7 +136,7 @@ final class NotionManager: NSObject, ObservableObject {
     // MARK: - Fetch Pages
 
     func fetchPages() async {
-        guard let userID = AppleAuthManager.shared.getUserID() else { return }
+        guard let userID = encodedUserID() else { return }
 
         guard let url = URL(string: "\(baseURL)/notion/pages?user_id=\(userID)") else { return }
         var request = URLRequest(url: url)
@@ -154,6 +159,7 @@ final class NotionManager: NSObject, ObservableObject {
 
     func setParentPage(id: String, title: String) async {
         guard let userID = AppleAuthManager.shared.getUserID() else { return }
+        // user_id goes in JSON body here, no URL encoding needed
 
         guard let url = URL(string: "\(baseURL)/notion/set-parent") else { return }
         var request = URLRequest(url: url)

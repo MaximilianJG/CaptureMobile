@@ -14,6 +14,8 @@ from contextlib import asynccontextmanager
 from collections import defaultdict
 from typing import Dict, Any, Optional, NamedTuple
 
+from urllib.parse import quote
+
 from fastapi import FastAPI, HTTPException, status, Request, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
@@ -683,13 +685,16 @@ async def get_notion_auth_url(
     if not NOTION_CLIENT_ID:
         raise HTTPException(status_code=500, detail="Notion OAuth not configured")
 
+    if not NOTION_REDIRECT_URI:
+        raise HTTPException(status_code=500, detail="Notion redirect URI not configured")
+
     url = (
         f"https://api.notion.com/v1/oauth/authorize"
         f"?client_id={NOTION_CLIENT_ID}"
         f"&response_type=code"
         f"&owner=user"
-        f"&redirect_uri={NOTION_REDIRECT_URI}"
-        f"&state={user_id}"
+        f"&redirect_uri={quote(NOTION_REDIRECT_URI, safe='')}"
+        f"&state={quote(user_id, safe='')}"
     )
     return {"url": url}
 
