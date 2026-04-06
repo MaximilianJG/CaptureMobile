@@ -2,233 +2,240 @@
 //  AppleAuthManager.swift
 //  CaptureMobile
 //
-//  Created by Maximilian Glasmacher on 29.01.26.
-//
 
 import Foundation
 import SwiftUI
 import Combine
 import AuthenticationServices
 import PostHog
+import Supabase
 
 class AppleAuthManager: NSObject, ObservableObject {
     static let shared = AppleAuthManager()
-    
+
     @Published var isSignedIn: Bool = false
     @Published var currentUser: UserProfile?
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
-    
+
     private let keychain = KeychainHelper.shared
-    
+    private let supabase = SupabaseManager.shared.client
+
     struct UserProfile {
-        let userID: String
+        let userID: String          // Supabase UUID
+        let appleUserID: String     // Original Apple user ID
         let email: String?
         let name: String?
-        
-        var displayName: String {
-            name ?? email ?? "User"
-        }
-        
-        var displayEmail: String {
-            email ?? "Apple ID User"
-        }
+
+        var displayName: String { name ?? email ?? "User" }
+        var displayEmail: String { email ?? "Apple ID User" }
     }
-    
+
     private override init() {
         super.init()
-        
-        // Check keychain synchronously to prevent flash of auth view
-        if let userID = keychain.readString(forKey: .appleUserID) {
+
+        // Restore session from Supabase (persisted automatically)
+        Task {
+            await restoreSession()
+        }
+    }
+
+    // MARK: - Restore Session
+
+    @MainActor
+    private func restoreSession() async {
+        if let session = try? await supabase.auth.session {
+            let uid = session.user.id.uuidString
+            SupabaseManager.shared.currentUserID = uid
+
+            let appleUID = keychain.readString(forKey: .appleUserID) ?? ""
             let email = keychain.readString(forKey: .userEmail)
             let name = keychain.readString(forKey: .userName)
-            
-            self.currentUser = UserProfile(
-                userID: userID,
+
+            currentUser = UserProfile(
+                userID: uid,
+                appleUserID: appleUID,
                 email: email,
                 name: name
             )
-            self.isSignedIn = true
-            
-            // Verify credential state in background
-            checkCredentialState(userID: userID)
+            isSignedIn = true
+
+            if !appleUID.isEmpty {
+                checkCredentialState(userID: appleUID)
+            }
+            return
+        }
+
+        // Fallback: check keychain for Apple user ID (pre-migration)
+        if let appleUID = keychain.readString(forKey: .appleUserID) {
+            let email = keychain.readString(forKey: .userEmail)
+            let name = keychain.readString(forKey: .userName)
+            currentUser = UserProfile(
+                userID: appleUID,
+                appleUserID: appleUID,
+                email: email,
+                name: name
+            )
+            isSignedIn = true
+            checkCredentialState(userID: appleUID)
         }
     }
-    
-    // MARK: - Get User ID (for API calls)
+
+    // MARK: - Get User ID (Supabase UUID preferred)
+
     func getUserID() -> String? {
+        if let supabaseID = SupabaseManager.shared.currentUserID {
+            return supabaseID
+        }
         return keychain.readString(forKey: .appleUserID)
     }
 
     // MARK: - Update Profile
+
     @MainActor
     func updateName(_ newName: String) {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let user = currentUser else { return }
         _ = keychain.save(trimmed, forKey: .userName)
-        currentUser = UserProfile(userID: user.userID, email: user.email, name: trimmed)
+        currentUser = UserProfile(
+            userID: user.userID, appleUserID: user.appleUserID,
+            email: user.email, name: trimmed
+        )
         PostHogSDK.shared.capture("profile_name_updated")
     }
-    
+
     // MARK: - Check Credential State
+
     private func checkCredentialState(userID: String) {
-        let appleIDProvider = ASAuthorizationAppleIDProvider()
-        appleIDProvider.getCredentialState(forUserID: userID) { [weak self] state, error in
+        let provider = ASAuthorizationAppleIDProvider()
+        provider.getCredentialState(forUserID: userID) { [weak self] state, _ in
             DispatchQueue.main.async {
-                switch state {
-                case .authorized:
-                    // User is still authorized
-                    break
-                case .revoked, .notFound:
-                    // User revoked authorization or not found - sign out
+                if state == .revoked || state == .notFound {
                     self?.signOut()
-                case .transferred:
-                    // User transferred to a different iCloud account
-                    break
-                @unknown default:
-                    break
                 }
             }
         }
     }
-    
+
     // MARK: - Sign In
+
     @MainActor
     func signIn() {
         isLoading = true
         errorMessage = nil
-        
-        PostHogSDK.shared.capture("sign_in_started", properties: [
-            "provider": "apple"
-        ])
-        
+        PostHogSDK.shared.capture("sign_in_started", properties: ["provider": "apple"])
+
         let request = ASAuthorizationAppleIDProvider().createRequest()
         request.requestedScopes = [.fullName, .email]
-        
+
         let controller = ASAuthorizationController(authorizationRequests: [request])
         controller.delegate = self
         controller.presentationContextProvider = self
         controller.performRequests()
     }
-    
+
     // MARK: - Sign Out
+
     @MainActor
     func signOut() {
-        PostHogSDK.shared.capture("sign_out", properties: [
-            "provider": "apple"
-        ])
+        PostHogSDK.shared.capture("sign_out")
         PostHogSDK.shared.reset()
-        
-        // Only clear the user ID - keep name/email so they're available on re-sign-in
-        // (Apple only provides name/email on FIRST sign-in ever)
+
+        Task { try? await supabase.auth.signOut() }
+
         _ = keychain.delete(forKey: .appleUserID)
-        
-        // Reset shortcut setup flag
         UserDefaults.standard.removeObject(forKey: "shortcutCreated")
-        
-        // Clear capture history
         CaptureHistoryManager.shared.clearHistory()
-        
+
         isSignedIn = false
         currentUser = nil
     }
-    
+
     // MARK: - Handle Sign In Result
+
     @MainActor
     private func handleSignInResult(_ credential: ASAuthorizationAppleIDCredential) {
-        let userID = credential.user
-        
-        // Name and email are only provided on FIRST sign-in
-        // We must save them as Apple won't send them again
-        var email = credential.email
-        var fullName: String? = nil
-        
-        if let givenName = credential.fullName?.givenName,
-           let familyName = credential.fullName?.familyName {
-            fullName = "\(givenName) \(familyName)"
-        } else if let givenName = credential.fullName?.givenName {
-            fullName = givenName
-        }
-        
-        // Check if we already have stored values (for returning users)
-        if email == nil {
-            email = keychain.readString(forKey: .userEmail)
-        }
-        if fullName == nil {
-            fullName = keychain.readString(forKey: .userName)
-        }
-        
+        let appleUID = credential.user
+
+        // Name/email only on first sign-in
+        var email = credential.email ?? keychain.readString(forKey: .userEmail)
+        var fullName: String? = {
+            if let g = credential.fullName?.givenName, let f = credential.fullName?.familyName {
+                return "\(g) \(f)"
+            }
+            return credential.fullName?.givenName ?? keychain.readString(forKey: .userName)
+        }()
+
         // Save to keychain
-        _ = keychain.save(userID, forKey: .appleUserID)
-        if let email = email {
-            _ = keychain.save(email, forKey: .userEmail)
+        _ = keychain.save(appleUID, forKey: .appleUserID)
+        if let e = email { _ = keychain.save(e, forKey: .userEmail) }
+        if let n = fullName { _ = keychain.save(n, forKey: .userName) }
+
+        // Exchange Apple identity token with Supabase Auth
+        Task {
+            var supabaseUserID = appleUID
+
+            if let tokenData = credential.identityToken,
+               let idToken = String(data: tokenData, encoding: .utf8) {
+                do {
+                    let session = try await supabase.auth.signInWithIdToken(
+                        credentials: .init(provider: .apple, idToken: idToken)
+                    )
+                    supabaseUserID = session.user.id.uuidString
+                    SupabaseManager.shared.currentUserID = supabaseUserID
+                    print("✅ Supabase auth: \(supabaseUserID)")
+                } catch {
+                    print("⚠️ Supabase auth failed, using Apple ID: \(error.localizedDescription)")
+                }
+            }
+
+            await MainActor.run {
+                currentUser = UserProfile(
+                    userID: supabaseUserID,
+                    appleUserID: appleUID,
+                    email: email,
+                    name: fullName
+                )
+                isSignedIn = true
+                isLoading = false
+            }
+
+            PostHogSDK.shared.identify(supabaseUserID, userProperties: [
+                "name": fullName ?? "Unknown",
+                "email": email ?? "hidden",
+                "auth_provider": "apple"
+            ])
+            PostHogSDK.shared.capture("sign_in_completed", properties: ["provider": "apple"])
+            DeviceTokenManager.shared.registerIfNeeded()
         }
-        if let name = fullName {
-            _ = keychain.save(name, forKey: .userName)
-        }
-        
-        currentUser = UserProfile(
-            userID: userID,
-            email: email,
-            name: fullName
-        )
-        
-        isSignedIn = true
-        isLoading = false
-        
-        // Identify user in PostHog
-        PostHogSDK.shared.identify(userID, userProperties: [
-            "name": fullName ?? "Unknown",
-            "email": email ?? "hidden",
-            "auth_provider": "apple"
-        ])
-        
-        PostHogSDK.shared.capture("sign_in_completed", properties: [
-            "provider": "apple"
-        ])
-        
-        // Register device token for push notifications (may have been received before sign-in)
-        DeviceTokenManager.shared.registerIfNeeded()
     }
 }
 
 // MARK: - ASAuthorizationControllerDelegate
+
 extension AppleAuthManager: ASAuthorizationControllerDelegate {
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
-        if let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential {
-            Task { @MainActor in
-                handleSignInResult(appleIDCredential)
-            }
+        if let cred = authorization.credential as? ASAuthorizationAppleIDCredential {
+            Task { @MainActor in handleSignInResult(cred) }
         }
     }
-    
+
     func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
         Task { @MainActor in
             isLoading = false
-            
-            // Don't show error for user cancellation
-            if let authError = error as? ASAuthorizationError,
-               authError.code == .canceled {
-                return
-            }
-            
+            if let e = error as? ASAuthorizationError, e.code == .canceled { return }
             errorMessage = error.localizedDescription
-            
-            PostHogSDK.shared.capture("sign_in_failed", properties: [
-                "provider": "apple",
-                "error": error.localizedDescription
-            ])
+            PostHogSDK.shared.capture("sign_in_failed", properties: ["error": error.localizedDescription])
         }
     }
 }
 
 // MARK: - ASAuthorizationControllerPresentationContextProviding
+
 extension AppleAuthManager: ASAuthorizationControllerPresentationContextProviding {
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let window = windowScene.windows.first else {
-            return UIWindow()
-        }
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let window = scene.windows.first else { return UIWindow() }
         return window
     }
 }

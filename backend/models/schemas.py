@@ -3,100 +3,51 @@ Pydantic schemas for request/response validation.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
-from datetime import datetime
+from typing import Optional, Dict, Any, List
 
 
-# ============================================
-# Request Schemas
-# ============================================
-
-class AnalyzeScreenshotRequest(BaseModel):
-    """Request body for screenshot analysis endpoint."""
-    image: str = Field(..., description="Base64 encoded image data")
-    user_id: str = Field(..., description="Apple user ID for rate limiting")
-    source: Optional[str] = Field("screenshot", description="Image source: 'screenshot' or 'camera'")
-    context: Optional[str] = Field(None, description="User-provided context about the image")
-
-
-class AnalyzeCaptureRequest(BaseModel):
-    """Request body for the unified capture endpoint (notes + camera + screenshot)."""
-    image: Optional[str] = Field(None, description="Base64 encoded image data (camera/screenshot)")
+class CaptureRequest(BaseModel):
+    """Request body for the capture endpoint."""
+    image: Optional[str] = Field(None, description="Base64 encoded image data")
     text: Optional[str] = Field(None, description="Free-form text (notes)")
-    user_id: str = Field(..., description="Apple user ID")
+    user_id: str = Field(..., description="Supabase user UUID")
     source: str = Field("notes", description="Capture source: 'notes', 'camera', or 'screenshot'")
 
 
-class SetNotionParentRequest(BaseModel):
-    """Request body for setting the user's Notion parent page."""
-    user_id: str = Field(..., description="Apple user ID")
-    page_id: str = Field(..., description="Notion page ID to use as parent")
-    page_title: Optional[str] = Field(None, description="Page title for display")
+class CaptureData(BaseModel):
+    """A capture record returned from the database."""
+    id: str
+    capture_title: str
+    category: str
+    capture_method: str
+    time_captured: str
+    extracted_data: Dict[str, Any] = {}
+    image_url: Optional[str] = None
 
 
-class RegisterDeviceRequest(BaseModel):
-    """Request body for device token registration."""
-    user_id: str = Field(..., description="Apple user ID")
-    device_token: str = Field(..., description="APNs device token")
-    is_sandbox: bool = Field(default=False, description="True if this is a debug/sandbox build")
-
-
-# ============================================
-# Response Schemas
-# ============================================
-
-class AnalyzeScreenshotResponse(BaseModel):
-    """Response from screenshot analysis endpoint - returns events for client to create."""
-    success: bool = Field(..., description="Whether events were found")
-    events_to_create: List["ExtractedEventInfo"] = Field(default_factory=list, description="Events for client to create locally")
-    message: str = Field(..., description="Status message")
-
-
-class HealthResponse(BaseModel):
-    """Response from health check endpoint."""
-    status: str = Field(..., description="Service status")
-    timestamp: str = Field(..., description="Current server timestamp")
-
-
-class AsyncAnalyzeResponse(BaseModel):
-    """Response from async screenshot analysis endpoint."""
-    success: bool = Field(..., description="Whether the job was queued")
-    job_id: str = Field(..., description="Job ID to track status")
-    message: str = Field(..., description="Status message")
+class AsyncCaptureResponse(BaseModel):
+    """Response from async capture endpoint."""
+    success: bool
+    job_id: str
+    message: str
 
 
 class JobStatusResponse(BaseModel):
     """Response from job status endpoint."""
-    job_id: str = Field(..., description="Job ID")
-    status: str = Field(..., description="Job status: processing, completed, failed")
-    events_to_create: Optional[List["ExtractedEventInfo"]] = Field(None, description="Events if completed")
-    error: Optional[str] = Field(None, description="Error message if failed")
+    job_id: str
+    status: str
+    capture: Optional[CaptureData] = None
+    error: Optional[str] = None
 
 
-# ============================================
-# OpenAI Related Schemas
-# ============================================
-
-class ExtractedEventInfo(BaseModel):
-    """Event information extracted from screenshot by OpenAI."""
-    title: str = Field(..., description="Event title")  # Required
-    date: str = Field(..., description="Event start date (YYYY-MM-DD format)")  # Required
-    end_date: Optional[str] = Field(None, description="Event end date for multi-day events (YYYY-MM-DD format). Only set if different from date.")
-    start_time: Optional[str] = Field(None, description="Start time (HH:MM format, 24h)")
-    end_time: Optional[str] = Field(None, description="End time (HH:MM format, 24h)")
-    location: Optional[str] = Field(None, description="Event location if mentioned")
-    description: Optional[str] = Field(None, description="Additional details or notes")
-    timezone: Optional[str] = Field("Europe/Berlin", description="Timezone if mentioned")
-    is_all_day: bool = Field(False, description="Whether this is an all-day event")
-    is_deadline: bool = Field(False, description="Whether this is a deadline event")
-    confidence: float = Field(default=0.5, ge=0.0, le=1.0, description="Confidence score 0-1")
-    attendee_name: Optional[str] = Field(None, description="Name of the other person involved")
-    source_app: Optional[str] = Field(None, description="Source app detected from screenshot (e.g., WhatsApp, Instagram)")
+class HealthResponse(BaseModel):
+    """Response from health check endpoint."""
+    status: str
+    timestamp: str
 
 
-class OpenAIAnalysisResult(BaseModel):
-    """Result from OpenAI screenshot analysis - supports multiple events."""
-    found_events: bool = Field(..., description="Whether any events were found in the image")
-    event_count: int = Field(default=0, description="Number of events detected")
-    events: List[ExtractedEventInfo] = Field(default_factory=list, description="List of extracted event information")
-    raw_text: Optional[str] = Field(None, description="Any relevant text extracted from image")
+class RegisterDeviceRequest(BaseModel):
+    """Request body for device token registration."""
+    user_id: str = Field(..., description="Supabase user UUID")
+    device_token: str = Field(..., description="APNs device token")
+    is_sandbox: bool = Field(default=False, description="True if this is a debug/sandbox build")

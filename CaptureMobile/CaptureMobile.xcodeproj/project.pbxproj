@@ -10,6 +10,7 @@
 		670EE1822F1BE0EC00E6D329 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 670EE1812F1BE0EC00E6D329 /* GoogleSignIn */; };
 		670EE1842F1BE0EC00E6D329 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 670EE1832F1BE0EC00E6D329 /* GoogleSignInSwift */; };
 		678489D52F20DFB000646787 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = 678489D42F20DFB000646787 /* PostHog */; };
+		67A79ED12F83FC6300F4B278 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 67A79ED02F83FC6300F4B278 /* Supabase */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,6 +43,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				67A79ED12F83FC6300F4B278 /* Supabase in Frameworks */,
 				678489D52F20DFB000646787 /* PostHog in Frameworks */,
 				670EE1822F1BE0EC00E6D329 /* GoogleSignIn in Frameworks */,
 				670EE1842F1BE0EC00E6D329 /* GoogleSignInSwift in Frameworks */,
@@ -55,6 +57,7 @@
 			isa = PBXGroup;
 			children = (
 				670EE15E2F1BDA6B00E6D329 /* CaptureMobile */,
+				67A79ECF2F83FC6300F4B278 /* Frameworks */,
 				670EE15D2F1BDA6B00E6D329 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -65,6 +68,13 @@
 				670EE15C2F1BDA6B00E6D329 /* CaptureMobile.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		67A79ECF2F83FC6300F4B278 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -90,6 +100,7 @@
 				670EE1812F1BE0EC00E6D329 /* GoogleSignIn */,
 				670EE1832F1BE0EC00E6D329 /* GoogleSignInSwift */,
 				678489D42F20DFB000646787 /* PostHog */,
+				67A79ED02F83FC6300F4B278 /* Supabase */,
 			);
 			productName = CaptureMobile;
 			productReference = 670EE15C2F1BDA6B00E6D329 /* CaptureMobile.app */;
@@ -122,6 +133,7 @@
 			packageReferences = (
 				670EE1802F1BE0EC00E6D329 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 				678489D32F20DFB000646787 /* XCRemoteSwiftPackageReference "posthog-ios" */,
+				67A79ECE2F83FB0200F4B278 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 670EE15D2F1BDA6B00E6D329 /* Products */;
@@ -395,6 +407,14 @@
 				minimumVersion = 3.37.2;
 			};
 		};
+		67A79ECE2F83FB0200F4B278 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -412,6 +432,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 678489D32F20DFB000646787 /* XCRemoteSwiftPackageReference "posthog-ios" */;
 			productName = PostHog;
+		};
+		67A79ED02F83FC6300F4B278 /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 67A79ECE2F83FB0200F4B278 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -2,8 +2,6 @@
 //  CaptureIntent.swift
 //  CaptureMobile
 //
-//  Created by Maximilian Glasmacher on 17.01.26.
-//
 
 import AppIntents
 import UIKit
@@ -12,16 +10,12 @@ import UniformTypeIdentifiers
 import PostHog
 import UserNotifications
 
-/// App Intent that allows Shortcuts to send images directly to Capture
-/// This appears as "Send to Capture" in the Shortcuts app
 @available(iOS 16.0, *)
 struct CaptureScreenshotIntent: AppIntent {
-    
+
     static var title: LocalizedStringResource = "Send to Capture"
-    static var description = IntentDescription("Analyzes a screenshot and creates a calendar event")
-    
-    // The image parameter that Shortcuts will provide
-    // Using supportedTypeIdentifiers to accept images from other actions
+    static var description = IntentDescription("Analyzes a screenshot and saves it as a capture")
+
     @Parameter(
         title: "Screenshot",
         description: "The screenshot to analyze",
@@ -29,215 +23,74 @@ struct CaptureScreenshotIntent: AppIntent {
         inputConnectionBehavior: .connectToPreviousIntentResult
     )
     var screenshot: IntentFile
-    
-    // Configure how this appears in Shortcuts
+
     static var parameterSummary: some ParameterSummary {
         Summary("Send \(\.$screenshot) to Capture")
     }
-    
-    // This runs when the shortcut executes
+
     @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        // Initialize PostHog (needed because intents run separately from main app)
         let config = PostHogConfig(
             apiKey: "phc_YgHsWyMi6uMVf9HcdJp4lBROijKC0vU0JIeRNHIQTdM",
             host: "https://eu.i.posthog.com"
         )
         PostHogSDK.shared.setup(config)
-        
-        // Track shortcut execution
         PostHogSDK.shared.capture("shortcut_executed")
-        
-        // Get the image data from the intent file
+
         let imageData = screenshot.data
         guard let image = UIImage(data: imageData) else {
-            PostHogSDK.shared.capture("shortcut_completed", properties: [
-                "success": false,
-                "error": "failed_to_read_screenshot"
-            ])
             PostHogSDK.shared.flush()
-            return .result(value: "❌ Failed to read screenshot")
+            return .result(value: "Failed to read screenshot")
         }
-        
-        // Check if user is signed in and get user ID
+
         guard let userID = AppleAuthManager.shared.getUserID() else {
-            PostHogSDK.shared.capture("shortcut_completed", properties: [
-                "success": false,
-                "error": "not_signed_in"
-            ])
             PostHogSDK.shared.flush()
-            return .result(value: "❌ Not signed in. Please open Capture app and sign in first.")
+            return .result(value: "Not signed in. Please open Capture and sign in first.")
         }
-        
-        // Ensure device token is registered (handles server restarts)
+
         DeviceTokenManager.shared.registerIfNeeded()
-        
-        // Check calendar access
-        guard CalendarService.shared.hasAccess else {
-            PostHogSDK.shared.capture("shortcut_completed", properties: [
-                "success": false,
-                "error": "no_calendar_access"
-            ])
+
+        sendNotification(title: "Analyzing Screenshot...", body: "You'll get a notification when done.")
+
+        if let jobID = await APIService.shared.uploadCaptureAsync(
+            image: image, text: nil, userID: userID, source: "screenshot"
+        ) {
+            CaptureProcessingState.shared.startProcessing(jobID: jobID)
+            PendingJobManager.shared.savePendingJob(jobID: jobID)
+
+            PostHogSDK.shared.capture("shortcut_upload_success", properties: ["job_id": jobID])
             PostHogSDK.shared.flush()
-            return .result(value: "❌ No calendar access. Please open Capture app and grant calendar permission.")
-        }
-        
-        // Check notification authorization to decide which flow to use
-        let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
-        let pushEnabled = notificationSettings.authorizationStatus == .authorized
-        
-        PostHogSDK.shared.capture("shortcut_flow_selected", properties: [
-            "flow": pushEnabled ? "async_push" : "sync_fallback"
-        ])
-        
-        if pushEnabled {
-            // =====================================================
-            // FLOW A: Push notifications enabled - use async flow
-            // =====================================================
-            
-            sendNotification(
-                title: "Analyzing Screenshot...",
-                body: "You'll get a notification when done."
-            )
-            
-            if let jobID = await APIService.shared.uploadScreenshotAsync(image, userID: userID) {
-                // Track this job for processing state & failure detection
-                CaptureProcessingState.shared.startProcessing(jobID: jobID)
-                
-                // Save job_id as pending so it can be recovered if push fails
-                // (e.g., Focus Mode suppresses notification, payload too large, etc.)
-                // PendingJobManager.recoverPendingJobs() will clean it up on next app open.
-                PendingJobManager.shared.savePendingJob(jobID: jobID)
-                
-                PostHogSDK.shared.capture("shortcut_async_upload_success", properties: [
-                    "job_id": jobID
-                ])
-                PostHogSDK.shared.flush()
-                
-                return .result(value: "📸 Analyzing...")
-            } else {
-                // Upload failed - save for background retry
-                BackgroundUploadManager.shared.enqueue(image: image, userID: userID)
-                
-                PostHogSDK.shared.capture("shortcut_async_upload_failed")
-                PostHogSDK.shared.flush()
-                
-                return .result(value: "⏳ Upload queued. It will retry when you open the app.")
-            }
+            return .result(value: "Analyzing...")
         } else {
-            // =====================================================
-            // FLOW B: No push - try synchronous with timeout
-            // =====================================================
-            
-            // Use a local tracking ID for the sync flow
-            let trackingID = "sync-\(UUID().uuidString)"
-            CaptureProcessingState.shared.startProcessing(jobID: trackingID)
-            
-            sendNotification(
-                title: "Analyzing Screenshot...",
-                body: "This may take a moment."
-            )
-            
-            do {
-                // Try to complete synchronously
-                let result = try await APIService.shared.analyzeAndCreateEvents(image)
-                
-                // Mark success - clears processing state for this job
-                CaptureProcessingState.shared.markSuccess(jobID: trackingID)
-                
-                PostHogSDK.shared.capture("shortcut_sync_success", properties: [
-                    "events_created": result.eventsCreated
-                ])
-                PostHogSDK.shared.flush()
-                
-                // Send success notification
-                if result.eventsCreated == 1 {
-                    sendNotification(
-                        title: "Event Created",
-                        body: result.firstEventTitle ?? "New event"
-                    )
-                    return .result(value: "✅ \(result.firstEventTitle ?? "Event") created!")
-                } else {
-                    sendNotification(
-                        title: "\(result.eventsCreated) Events Created",
-                        body: result.message
-                    )
-                    return .result(value: "✅ \(result.eventsCreated) events created!")
-                }
-                
-            } catch let error as URLError where error.code == .timedOut {
-                // Timeout - remove sync tracking, start an async job
-                CaptureProcessingState.shared.stopProcessing(jobID: trackingID)
-                PostHogSDK.shared.capture("shortcut_sync_timeout")
-                
-                if let jobID = await APIService.shared.uploadScreenshotAsync(image, userID: userID) {
-                    // Track the real async job instead
-                    CaptureProcessingState.shared.startProcessing(jobID: jobID)
-                    PendingJobManager.shared.savePendingJob(jobID: jobID)
-                    PostHogSDK.shared.flush()
-                    return .result(value: "⏳ Still processing... Open the Capture app to see results.")
-                } else {
-                    PostHogSDK.shared.flush()
-                    return .result(value: "⏳ Processing took too long. Open the Capture app to try again.")
-                }
-                
-            } catch let error as APIService.APIError {
-                // Clear processing for this job
-                CaptureProcessingState.shared.stopProcessing(jobID: trackingID)
-                
-                PostHogSDK.shared.capture("shortcut_sync_failed", properties: [
-                    "error": error.localizedDescription
-                ])
-                PostHogSDK.shared.flush()
-                
-                sendNotification(
-                    title: "Capture Failed",
-                    body: error.localizedDescription
-                )
-                
-                return .result(value: "❌ \(error.localizedDescription)")
-                
-            } catch {
-                // Clear processing for this job
-                CaptureProcessingState.shared.stopProcessing(jobID: trackingID)
-                
-                PostHogSDK.shared.capture("shortcut_sync_failed", properties: [
-                    "error": error.localizedDescription
-                ])
-                PostHogSDK.shared.flush()
-                
-                return .result(value: "❌ \(error.localizedDescription)")
-            }
+            BackgroundUploadManager.shared.enqueue(image: image, userID: userID)
+            PostHogSDK.shared.flush()
+            return .result(value: "Upload queued. It will retry when you open the app.")
         }
     }
-    
-    // Open the app when there's an error (optional)
+
     static var openAppWhenRun: Bool = false
-    
-    // MARK: - Notification Helpers
-    
+
     private func sendNotification(title: String, body: String) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
-        
-        let request = UNNotificationRequest(
-            identifier: UUID().uuidString,
-            content: content,
-            trigger: nil  // nil = send immediately
-        )
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }
 }
 
-/// Shortcuts App Provider - registers all intents with the system
-/// Note: We intentionally return an empty array so "Send to Capture" doesn't appear
-/// in the App Shortcuts gallery. Users should use our pre-made iCloud shortcut instead,
-/// which provides the complete workflow (Take Screenshot → Send to Capture).
 @available(iOS 16.0, *)
 struct CaptureShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
-        return [AppShortcut]()
+        AppShortcut(
+            intent: CaptureScreenshotIntent(),
+            phrases: [
+                "Send to \(.applicationName)",
+                "Capture with \(.applicationName)"
+            ],
+            shortTitle: "Send to Capture",
+            systemImageName: "camera.viewfinder"
+        )
     }
 }

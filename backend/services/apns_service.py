@@ -247,56 +247,20 @@ class APNsService:
             print(f"❌ Push error: {e}")
             return False
     
-    async def send_event_created_notification(
+    async def send_capture_saved_notification(
         self,
         device_token: str,
-        events: list,
-        job_id: str,
+        title: str,
+        category: str,
+        job_id: str = "",
         use_sandbox: bool = False,
     ) -> bool:
-        """Send notification when events are successfully extracted.
-        
-        Only sends the job_id in the payload (not the full events data)
-        to stay well within Apple's 4KB APNS payload limit.
-        The iOS app fetches full event data via /job-status/{job_id}.
-        """
-        if not events:
-            return False
-        
-        if len(events) == 1:
-            title = "Event Created"
-            event = events[0]
-            body = event.title if hasattr(event, 'title') else str(event.get('title', 'New Event'))
-        else:
-            title = f"{len(events)} Events Created"
-            first_title = events[0].title if hasattr(events[0], 'title') else str(events[0].get('title', 'Event'))
-            body = f"{first_title} and {len(events) - 1} more"
-        
+        """Send notification when a capture is saved to Supabase."""
         return await self.send_notification(
             device_token=device_token,
-            title=title,
-            body=body,
-            data={"action": "create_events", "job_id": job_id},
-            use_sandbox=use_sandbox,
-        )
-    
-    async def send_no_events_notification(self, device_token: str, job_id: str = "", use_sandbox: bool = False) -> bool:
-        """Send notification when no events were found."""
-        return await self.send_notification(
-            device_token=device_token,
-            title="No Events Found",
-            body="Couldn't detect events in the screenshot",
-            data={"action": "no_events", "job_id": job_id},
-            use_sandbox=use_sandbox,
-        )
-    
-    async def send_notion_saved_notification(self, device_token: str, summary: str, job_id: str = "", use_sandbox: bool = False) -> bool:
-        """Send notification when content is saved to Notion."""
-        return await self.send_notification(
-            device_token=device_token,
-            title="Saved to Notion",
-            body=summary[:100],
-            data={"action": "notion_saved", "job_id": job_id},
+            title="Capture Saved",
+            body=f"{title} ({category})",
+            data={"action": "capture_saved", "job_id": job_id, "category": category},
             use_sandbox=use_sandbox,
         )
 

@@ -1,523 +1,170 @@
 """
-OpenAI Vision Service for screenshot analysis.
+OpenAI Service for capture classification and data extraction.
 
-Uses GPT-4 Vision to analyze screenshots and extract event information.
+Two-step pipeline:
+  1. classify_category — determine what kind of capture this is + generate a title
+  2. extract_data     — pull structured fields based on the category
 """
 
 import os
 import json
-import base64
-import time
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
 from openai import AsyncOpenAI
 
-from models.schemas import OpenAIAnalysisResult, ExtractedEventInfo
-
 
 class OpenAIService:
-    """Service for analyzing screenshots using OpenAI Vision API."""
-    
+
     def __init__(self):
         self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = "gpt-4o"  # GPT-4 with vision capabilities
-    
-    async def analyze_screenshot(self, base64_image: str, source: str = "screenshot", context: str = None) -> OpenAIAnalysisResult:
-        """
-        Analyze a screenshot or photo to extract event information.
-        
-        Args:
-            base64_image: Base64 encoded image string
-            source: Image source - 'screenshot' or 'camera'
-            context: Optional user-provided context about the image
-            
-        Returns:
-            OpenAIAnalysisResult with extracted event info
-        """
+        self.model = "gpt-4o"
+
+    # ------------------------------------------------------------------
+    # Step 1 — Classify
+    # ------------------------------------------------------------------
+
+    async def classify_category(
+        self,
+        base64_image: Optional[str] = None,
+        text: Optional[str] = None,
+        source: str = "screenshot",
+    ) -> dict:
+        """Return {"category": str, "title": str, "confidence": float}."""
         try:
-            api_start = time.time()
-            
-            if not base64_image.startswith("data:"):
-                base64_image = f"data:image/jpeg;base64,{base64_image}"
-            
-            system_prompt = self._get_system_prompt()
-            user_text = self._get_user_prompt(source, context)
-            
-            print(f"  [OpenAI] Calling {self.model} API... (source: {source})", flush=True)
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": user_text
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": base64_image,
-                                    "detail": "high"
-                                }
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=2000,  # Increased for multiple events
-                response_format={"type": "json_object"}
-            )
-            
-            api_elapsed = time.time() - api_start
-            
-            # Log token usage
-            usage = response.usage
-            print(f"  [OpenAI] API response in {api_elapsed:.1f}s | tokens: {usage.prompt_tokens} in, {usage.completion_tokens} out", flush=True)
-            
-            # Parse the response
-            result_text = response.choices[0].message.content
-            
-            if result_text is None:
-                print("  [OpenAI] ERROR: Response content is None (possibly filtered by content safety)", flush=True)
-                return OpenAIAnalysisResult(
-                    found_events=False,
-                    event_count=0,
-                    events=[],
-                    raw_text="OpenAI error: Response was empty (content may have been filtered by safety system)"
-                )
-            
-            # Log raw GPT-4o response for debugging
-            preview = result_text[:1000] + ('...' if len(result_text) > 1000 else '')
-            print(f"  [OpenAI] Raw response: {preview}", flush=True)
-            
-            result_json = json.loads(result_text)
-            
-            return self._parse_response(result_json)
-            
-        except Exception as e:
-            error_msg = str(e)
-            print(f"  [OpenAI] ANALYSIS ERROR ({type(e).__name__}): {error_msg}", flush=True)
-            # Return result with error info so it can be propagated to the client
-            return OpenAIAnalysisResult(
-                found_events=False,
-                event_count=0,
-                events=[],
-                raw_text=f"OpenAI error: {error_msg}"
-            )
-    
-    def _get_system_prompt(self) -> str:
-        """Get the system prompt for event extraction."""
-        # Get current date/time context
-        now = datetime.now()
-        today_str = now.strftime("%Y-%m-%d")
-        day_of_week = now.strftime("%A")
-        current_year = now.year
-        
-        return f"""You are an expert at analyzing images and extracting calendar-worthy information.
+            today = datetime.now().strftime("%Y-%m-%d")
 
-TODAY'S DATE: {today_str} ({day_of_week})
-CURRENT YEAR: {current_year}
+            system = f"""You classify user captures into a category and generate a short title.
 
-Your task is to look at images (screenshots OR photos of physical items) and identify anything that should go on a calendar.
+TODAY: {today}
 
-=== WHAT TO LOOK FOR ===
-- Events, meetings, appointments, scheduled activities
-- DEADLINES ("due by", "closes at", "submit before", "deadline", "last day")
-- Reminders about time-sensitive actions
-- Reservations, bookings, tickets with dates/times
-- Any date + time combination that someone would want to remember
-- Physical items: flyers, posters, whiteboards, handwritten notes, signs, menus with event info
-- Displays, screens, or monitors showing event information
-- Printed schedules, timetables, or agendas
+CATEGORIES (pick exactly one):
+- "restaurant" — menus, food photos, dining, restaurant info
+- "clothing"   — fashion items, outfits, brands, style
+- "event"      — meetings, appointments, concerts, anything with a date/time
+- "note"       — general notes, lists, ideas, text info
+- "movie"      — movie posters, film recs, cinema listings, TV shows
+- "book"       — book covers, reading lists, recommendations
+- "other"      — anything else
 
-=== EXTRACT THESE DETAILS ===
-- Title/subject
-- Date (specific or relative like "tomorrow", "next Monday")
-- Time (even if phrased as "at 2pm", "by 5pm", "before noon")
-- Location if mentioned
-- Additional context
+RULES:
+- Pick the single best category.
+- Generate a concise title (max 60 chars) that names the specific thing,
+  e.g. "Tantris Munich" not "Restaurant Menu".
 
-=== CONTEXT DISCOVERY ===
-Examine the ENTIRE screenshot to gather context, not just the event details:
+Respond ONLY with JSON: {{"category":"...","title":"...","confidence":0.0-1.0}}"""
 
-LOOK FOR:
-- WHO: Names, profile pictures, email addresses, usernames, sender info
-- WHAT: Subject lines, message content, event purpose, meeting agenda
-- WHERE: App name (Messages, WhatsApp, Email, etc.), website, platform
-- WHY: Any indication of the meeting's purpose or topic
-- SOURCE APP: Identify the app from UI elements, colors, layout, icons
-
-CONTEXTUAL CLUES:
-- Message sender name → likely the other attendee
-- Email "From:" field → who scheduled/invited
-- Chat conversation → may reveal meeting purpose
-- Profile names in scheduling apps → attendee names
-- Subject lines → meeting topic for title
-- Thread context → why the meeting is happening
-
-SOURCE APP DETECTION (set source_app field):
-- If the image is a photo of a physical item (flyer, poster, whiteboard, sign, etc.) → "Camera"
-- Green chat bubbles, green header → "WhatsApp"
-- Blue chat bubbles (iMessage style) → "iMessage"
-- Instagram DM interface → "Instagram"
-- Gmail/Google Mail interface → "Gmail"
-- Outlook interface → "Outlook"
-- LinkedIn messages → "LinkedIn"
-- Slack interface → "Slack"
-- Teams interface → "Microsoft Teams"
-- Calendar app → "Calendar"
-- Notes app → "Notes"
-- Twitter/X DMs → "Twitter"
-- Facebook Messenger → "Messenger"
-- Telegram interface → "Telegram"
-- If unclear or unknown → null
-
-=== DEADLINE HANDLING ===
-Deadlines ARE events! They belong on a calendar. Mark them with is_deadline: true.
-- Set is_deadline: true for any deadline, due date, or submission cutoff
-- STILL extract the time even for deadlines (e.g., "Due by 5pm" → start_time: "17:00")
-- Prefix the title with "Deadline: " (e.g., "Deadline: Project Submission")
-
-Examples:
-- "Platform closes at 2pm" → is_deadline: true, start_time: "14:00"
-- "Due by 5pm" → is_deadline: true, start_time: "17:00"
-- "Submit before midnight" → is_deadline: true, start_time: "23:59"
-- "Assignment due Friday" (no time) → is_deadline: true, start_time: null
-
-=== TIMEZONE HANDLING ===
-Extract timezone from context and map to standard format:
-- "(Paris time)", "(CET)", "(Central European)" → "Europe/Paris"
-- "(Berlin time)", "(German time)" → "Europe/Berlin"
-- "(London time)", "(GMT)", "(UK time)" → "Europe/London"
-- "(EST)", "(Eastern)", "(New York)" → "America/New_York"
-- "(PST)", "(Pacific)", "(LA time)" → "America/Los_Angeles"
-- If no timezone mentioned → "Europe/Berlin"
-
-=== DATE RULES ===
-- Today is {today_str} ({day_of_week})
-- "Tomorrow" = the day after {today_str}
-- "Next Monday" = the coming Monday after today
-- "This weekend" = the upcoming Saturday/Sunday
-- Day name only (e.g., "Friday") = NEXT occurrence of that day
-- Month + day only (e.g., "March 15") = {current_year}, or {current_year + 1} if passed
-- No year specified = assume {current_year}
-
-DATE FORMAT INTERPRETATION (IMPORTANT):
-- Default to EUROPEAN format: DD-MM-YYYY or DD/MM/YYYY (day first, then month)
-- "07-03-2026" or "07/03/2026" = March 7th, 2026 (NOT July 3rd)
-- "15-01-2026" or "15/01/2026" = January 15th, 2026
-- Only use US format (MM-DD-YYYY) if the context is clearly American (US locations, US websites)
-- When the day number is > 12, it's unambiguous (e.g., "25-12-2026" = December 25th)
-- European locations (Paris, Berlin, London, etc.) = use European date format
-- If unsure, assume European format since default timezone is Europe/Berlin
-
-=== CONTEXT REASONING ===
-After gathering context, reason about what to include:
-
-1. TITLE: Should be descriptive and meaningful. Include:
-   - The purpose/topic if clear (e.g., "Coffee with Sarah" not just "Meeting")
-   - The person's name if it's a 1:1 (e.g., "Call with John")
-   - Context that makes the event recognizable at a glance
-
-2. DESCRIPTION: Include relevant context like:
-   - Who suggested/organized it
-   - Brief purpose if mentioned
-   - Any preparation needed
-   - Source app (e.g., "Via WhatsApp message")
-
-3. ATTENDEE: Extract the other person's name if identifiable from:
-   - Sender name, profile name, email address, or mention in text
-
-DO NOT include:
-- Irrelevant UI elements
-- Unrelated messages in the screenshot
-- Personal information beyond what's needed for the event
-
-=== MULTI-DAY EVENTS ===
-Some events span multiple days (conferences, trips, festivals, etc.):
-- "Conference Feb 15-17" → date: "2026-02-15", end_date: "2026-02-17", is_all_day: true
-- "Trip March 1-5" → date: "2026-03-01", end_date: "2026-03-05", is_all_day: true
-- "Workshop Feb 20-21, 9am-5pm" → date: "2026-02-20", end_date: "2026-02-21", start_time: "09:00", end_time: "17:00"
-- Single-day events: do NOT set end_date (leave as null)
-- Only set end_date when the event explicitly spans multiple days
-
-=== MULTIPLE EVENTS ===
-Screenshots may contain MULTIPLE calendar-worthy items. Look for ALL of them:
-- A list of upcoming appointments or meetings
-- Multiple messages about different events in a chat
-- Calendar views showing several events
-- Emails or messages with multiple dates mentioned
-- To-do lists with multiple deadlines
-- Event listings or schedules
-
-Return ALL events found as separate items in the events array, not just the first one.
-
-=== OUTPUT FORMAT ===
-- Times in 24-hour format (HH:MM)
-- Dates in YYYY-MM-DD format
-- All dates must be absolute (no relative dates in output)
-
-Respond ONLY with JSON:
-{{
-    "found_events": true/false,
-    "event_count": N,
-    "events": [
-        {{
-            "title": "Descriptive Event Title (include person/purpose)",
-            "date": "YYYY-MM-DD",
-            "end_date": "YYYY-MM-DD" or null,
-            "start_time": "HH:MM" or null,
-            "end_time": "HH:MM" or null,
-            "location": "Location" or null,
-            "description": "Relevant context: who organized, purpose, source app" or null,
-            "timezone": "Europe/Berlin",
-            "is_all_day": true/false,
-            "is_deadline": true/false,
-            "confidence": 0.0-1.0,
-            "attendee_name": "Name of the other person involved" or null,
-            "source_app": "WhatsApp/Instagram/Gmail/etc" or null
-        }}
-    ],
-    "raw_text": "Relevant text from the image"
-}}
-
-If nothing calendar-worthy is found, set found_events to false and events to an empty array [].
-If ONE event is found, event_count should be 1 and events should contain one item.
-If MULTIPLE events are found, event_count should match the array length.
-
-Be thorough - if there's a date and time mentioned, it probably belongs on a calendar!"""
-
-    def _get_user_prompt(self, source: str, context: str = None) -> str:
-        """Get the user prompt based on the image source and optional context."""
-        context_line = ""
-        if context:
-            context_line = f'\n\nThe user provided this additional context: "{context}". Use this to help identify and understand the events in the image.'
-
-        if source == "camera":
-            return (
-                "Analyze this photo thoroughly. It is a photo taken with the phone camera of a "
-                "physical item such as a flyer, poster, whiteboard, handwritten note, sign, display, "
-                "schedule, or screen. Look for ALL calendar-worthy events - there may be multiple events. "
-                "Read any text carefully, including handwritten text. Extract ALL event information and "
-                "include meaningful context in the title and description of each. "
-                "Respond with the JSON format specified."
-                + context_line
-            )
-        return (
-            "Analyze this screenshot thoroughly. Look for ALL calendar-worthy events - there may be "
-            "multiple events in a single screenshot. Examine the ENTIRE image for context - who is "
-            "involved (sender names, profiles), what each event is about (subject, purpose), and any "
-            "relevant details. Extract ALL event information and include meaningful context in the "
-            "title and description of each. Respond with the JSON format specified."
-            + context_line
-        )
-    
-    def _parse_response(self, result: dict) -> OpenAIAnalysisResult:
-        """Parse the OpenAI response into our schema - supports multiple events."""
-        found_events = result.get("found_events", False)
-        events_data = result.get("events", [])
-        raw_text = result.get("raw_text")
-        
-        print(f"  [Parse] GPT-4o returned: found_events={found_events}, events_count={len(events_data)}", flush=True)
-        
-        parsed_events: List[ExtractedEventInfo] = []
-        
-        if found_events and events_data:
-            for idx, event_info_data in enumerate(events_data, 1):
-                # Date is required - if missing, skip this event
-                date = event_info_data.get("date")
-                if not date:
-                    print(f"  [Parse] Event {idx}: SKIPPED - no date. Raw data: {event_info_data}", flush=True)
-                    continue
-                
-                # Title fallback
-                title = event_info_data.get("title") or "Event"
-                
-                # Smart is_all_day: if no start_time provided, treat as all-day
-                start_time = event_info_data.get("start_time")
-                is_all_day = event_info_data.get("is_all_day", False)
-                if not start_time and not is_all_day:
-                    is_all_day = True
-                
-                try:
-                    event_info = ExtractedEventInfo(
-                        title=title,
-                        date=date,
-                        end_date=event_info_data.get("end_date"),
-                        start_time=start_time,
-                        end_time=event_info_data.get("end_time"),
-                        location=event_info_data.get("location"),
-                        description=event_info_data.get("description"),
-                        timezone=event_info_data.get("timezone", "Europe/Berlin"),
-                        is_all_day=is_all_day,
-                        is_deadline=event_info_data.get("is_deadline", False),
-                        confidence=event_info_data.get("confidence", 0.5),
-                        attendee_name=event_info_data.get("attendee_name"),
-                        source_app=event_info_data.get("source_app"),
-                    )
-                    parsed_events.append(event_info)
-                    print(f"  [Parse] Event {idx}: OK - '{title}' on {date} {start_time or 'all-day'}", flush=True)
-                except Exception as e:
-                    print(f"  [Parse] Event {idx}: VALIDATION FAILED - {type(e).__name__}: {e}", flush=True)
-                    print(f"  [Parse] Event {idx}: Raw data was: {event_info_data}", flush=True)
-                    continue
-        elif not found_events:
-            print(f"  [Parse] GPT-4o reported no calendar-worthy events in this screenshot", flush=True)
-        elif not events_data:
-            print(f"  [Parse] GPT-4o said found_events=true but events array is empty!", flush=True)
-        
-        final_count = len(parsed_events)
-        print(f"  [Parse] Final result: {final_count} event(s) parsed successfully", flush=True)
-        
-        return OpenAIAnalysisResult(
-            found_events=final_count > 0,
-            event_count=final_count,
-            events=parsed_events,
-            raw_text=raw_text
-        )
-    
-    async def analyze_text_for_events(self, text: str, source: str = "notes") -> OpenAIAnalysisResult:
-        """
-        Analyze free-form text to extract calendar events (no image).
-        """
-        try:
-            system_prompt = self._get_system_prompt()
-            user_text = (
-                f"The user typed the following text (source: {source}). "
-                "Extract ALL calendar-worthy events from it. "
-                "Respond with the JSON format specified.\n\n"
-                f"---\n{text}\n---"
+            user_content = self._build_user_content(
+                text=text,
+                base64_image=base64_image,
+                prefix=f"Classify this capture (source: {source}).",
             )
 
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_text},
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_content},
                 ],
-                max_tokens=2000,
+                max_tokens=150,
                 response_format={"type": "json_object"},
             )
 
-            result_text = response.choices[0].message.content
-            if result_text is None:
-                return OpenAIAnalysisResult(
-                    found_events=False, event_count=0, events=[],
-                    raw_text="OpenAI error: Response was empty",
-                )
-
-            result_json = json.loads(result_text)
-            return self._parse_response(result_json)
-
-        except Exception as e:
-            print(f"  [OpenAI] Text analysis error: {e}", flush=True)
-            return OpenAIAnalysisResult(
-                found_events=False, event_count=0, events=[],
-                raw_text=f"OpenAI error: {str(e)}",
-            )
-
-    async def classify_intent(self, base64_image: str = None, text: str = None, source: str = "notes") -> dict:
-        """
-        Classify whether content should go to Calendar or Notion.
-
-        Returns: {"intent": "calendar"|"notion", "confidence": 0.0-1.0}
-        """
-        try:
-            now = datetime.now()
-            today_str = now.strftime("%Y-%m-%d")
-            day_of_week = now.strftime("%A")
-
-            system = f"""You classify user captures into one of two destinations.
-
-TODAY: {today_str} ({day_of_week})
-
-RULES:
-- "calendar": Content describes specific events, meetings, appointments, deadlines, reservations, or anything with a date+time that belongs on a calendar.
-- "notion": Content is notes, to-do lists, shopping lists, ideas, information to save, reference material, study notes, or anything meant for storage/organization rather than a specific calendar slot.
-
-When in doubt:
-- If there is a clear date/time for a scheduled event → calendar
-- If it is a list of items, tasks, or free-form text → notion
-- Source "notes" (typed text) leans toward notion unless it clearly describes calendar events
-- Source "camera"/"screenshot" can be either — look at the actual content
-
-Respond ONLY with JSON: {{"intent": "calendar" or "notion", "confidence": 0.0-1.0}}"""
-
-            messages = [{"role": "system", "content": system}]
-            user_content = []
-
-            if text:
-                user_content.append({"type": "text", "text": f"User's capture (source: {source}):\n\n{text}"})
-            else:
-                user_content.append({"type": "text", "text": f"Classify this image capture (source: {source})."})
-
-            if base64_image:
-                img_url = base64_image if base64_image.startswith("data:") else f"data:image/jpeg;base64,{base64_image}"
-                user_content.append({"type": "image_url", "image_url": {"url": img_url, "detail": "low"}})
-
-            messages.append({"role": "user", "content": user_content})
-
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=100,
-                response_format={"type": "json_object"}
-            )
-
             result = json.loads(response.choices[0].message.content)
-            intent = result.get("intent", "notion")
-            confidence = result.get("confidence", 0.5)
-            print(f"  [Intent] Classified as '{intent}' (confidence: {confidence})", flush=True)
-            return {"intent": intent, "confidence": confidence}
+
+            valid = ("restaurant", "clothing", "event", "note", "movie", "book", "other")
+            category = result.get("category", "other")
+            if category not in valid:
+                category = "other"
+
+            title = result.get("title", "Untitled Capture")[:80]
+            confidence = float(result.get("confidence", 0.5))
+
+            print(f"  [Classify] {category} — \"{title}\" ({confidence:.0%})", flush=True)
+            return {"category": category, "title": title, "confidence": confidence}
 
         except Exception as e:
-            print(f"  [Intent] Classification failed: {e}, defaulting to 'notion'", flush=True)
-            return {"intent": "notion", "confidence": 0.3}
+            print(f"  [Classify] Error: {e}", flush=True)
+            return {"category": "other", "title": "Untitled Capture", "confidence": 0.1}
 
-    async def extract_text_only(self, base64_image: str) -> str:
-        """
-        Extract only the text content from an image without event parsing.
-        Useful for debugging or showing users what was detected.
-        
-        Args:
-            base64_image: Base64 encoded image string
-            
-        Returns:
-            Extracted text from the image
-        """
+    # ------------------------------------------------------------------
+    # Step 2 — Extract
+    # ------------------------------------------------------------------
+
+    async def extract_data(
+        self,
+        base64_image: Optional[str] = None,
+        text: Optional[str] = None,
+        category: str = "other",
+        title: str = "",
+    ) -> dict:
+        """Return a flat dict of extracted fields (shape varies by category)."""
         try:
-            if not base64_image.startswith("data:"):
-                base64_image = f"data:image/jpeg;base64,{base64_image}"
-            
+            system = f"""You extract structured data from a capture.
+Category: "{category}"  Title: "{title}"
+
+Return a flat JSON object with ONLY the relevant fields below.
+Omit any field you cannot confidently fill.
+
+restaurant → cuisine, location, price_range, rating, dishes, vibe, reservation_info
+clothing   → brand, item_type, color, size, price, material, store, url
+event      → date (YYYY-MM-DD), start_time (HH:MM 24h), end_time, location, description, organizer, is_all_day
+note       → content, tags
+movie      → genre, director, year, rating, platform, cast, synopsis
+book       → author, genre, year, isbn, publisher, synopsis, rating
+other      → description, tags
+
+Respond ONLY with JSON."""
+
+            user_content = self._build_user_content(
+                text=text,
+                base64_image=base64_image,
+                prefix="Extract structured data from this capture.",
+                detail="high",
+            )
+
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Extract all visible text from this image. Return just the text, nothing else."
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": base64_image,
-                                    "detail": "high"
-                                }
-                            }
-                        ]
-                    }
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_content},
                 ],
-                max_tokens=500
+                max_tokens=1000,
+                response_format={"type": "json_object"},
             )
-            
-            return response.choices[0].message.content
-            
+
+            result = json.loads(response.choices[0].message.content)
+            print(f"  [Extract] {len(result)} field(s) for '{category}'", flush=True)
+            return result
+
         except Exception as e:
-            return f"Text extraction failed: {str(e)}"
+            print(f"  [Extract] Error: {e}", flush=True)
+            return {}
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_user_content(
+        text: Optional[str],
+        base64_image: Optional[str],
+        prefix: str,
+        detail: str = "low",
+    ) -> list:
+        parts: list = []
+
+        if text:
+            parts.append({"type": "text", "text": f"{prefix}\n\n{text}"})
+        else:
+            parts.append({"type": "text", "text": prefix})
+
+        if base64_image:
+            url = (
+                base64_image
+                if base64_image.startswith("data:")
+                else f"data:image/jpeg;base64,{base64_image}"
+            )
+            parts.append({"type": "image_url", "image_url": {"url": url, "detail": detail}})
+
+        return parts

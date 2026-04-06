@@ -2,8 +2,6 @@
 //  MainTabView.swift
 //  CaptureMobile
 //
-//  Created by Maximilian Glasmacher on 20.03.26.
-//
 
 import SwiftUI
 import PostHog
@@ -21,28 +19,18 @@ struct MainTabView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             TabView(selection: $selectedTab) {
-                NotesView(noteText: $noteText)
-                    .tag(Tab.notes)
-
-                CameraView(capturedPreview: $capturedPreview)
-                    .tag(Tab.camera)
-
-                HomeView()
-                    .tag(Tab.captures)
-
-                ProfileView()
-                    .tag(Tab.profile)
+                NotesView(noteText: $noteText).tag(Tab.notes)
+                CameraView(capturedPreview: $capturedPreview).tag(Tab.camera)
+                HomeView().tag(Tab.captures)
+                ProfileView().tag(Tab.profile)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .ignoresSafeArea()
             .allowsHitTesting(capturedPreview == nil)
 
             Group {
-                if hasContent {
-                    sendDismissBar
-                } else {
-                    FloatingTabBar(selectedTab: $selectedTab)
-                }
+                if hasContent { sendDismissBar }
+                else { FloatingTabBar(selectedTab: $selectedTab) }
             }
             .padding(.bottom, 16)
         }
@@ -53,42 +41,31 @@ struct MainTabView: View {
 
     private var sendDismissBar: some View {
         HStack(spacing: 0) {
-            Button {
-                dismissContent()
-            } label: {
+            Button { dismissContent() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(.primary)
-                    .frame(width: 52)
-                    .padding(.vertical, 10)
+                    .frame(width: 52).padding(.vertical, 10)
             }
             .buttonStyle(.plain)
 
-            Button {
-                sendContent()
-            } label: {
+            Button { sendContent() } label: {
                 HStack(spacing: 6) {
                     if isSending {
-                        ProgressView()
-                            .scaleEffect(0.75)
-                            .tint(.white)
+                        ProgressView().scaleEffect(0.75).tint(.white)
                     } else {
-                        Text("Send")
-                            .font(.system(size: 15, weight: .semibold))
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 13, weight: .semibold))
+                        Text("Send").font(.system(size: 15, weight: .semibold))
+                        Image(systemName: "arrow.right").font(.system(size: 13, weight: .semibold))
                     }
                 }
                 .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity).padding(.vertical, 10)
                 .background(Color.black, in: Capsule())
             }
             .buttonStyle(.plain)
             .disabled(isSending)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 8).padding(.vertical, 6)
         .background(.regularMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
         .padding(.horizontal, 40)
@@ -98,11 +75,8 @@ struct MainTabView: View {
     // MARK: - Actions
 
     private func dismissContent() {
-        if capturedPreview != nil {
-            capturedPreview = nil
-        } else {
-            noteText = ""
-        }
+        if capturedPreview != nil { capturedPreview = nil }
+        else { noteText = "" }
     }
 
     private func sendContent() {
@@ -113,16 +87,13 @@ struct MainTabView: View {
 
         let previewTitle: String = {
             if !text.isEmpty {
-                let firstLine = text.components(separatedBy: .newlines).first ?? text
-                return String(firstLine.prefix(60))
+                return String(text.components(separatedBy: .newlines).first?.prefix(60) ?? "Note")
             }
             return "Photo capture"
         }()
 
         PostHogSDK.shared.capture("capture_sent", properties: [
-            "source": source,
-            "has_image": image != nil,
-            "has_text": !text.isEmpty
+            "source": source, "has_image": image != nil, "has_text": !text.isEmpty
         ])
 
         Task {
@@ -134,20 +105,12 @@ struct MainTabView: View {
             if let jobID = await APIService.shared.uploadCaptureAsync(
                 image: image, text: text.isEmpty ? nil : text, userID: userID, source: source
             ) {
-                let captureEntry = CapturedEvent(
-                    id: jobID,
-                    title: previewTitle,
-                    startTime: {
-                        let f = DateFormatter()
-                        f.dateFormat = "yyyy-MM-dd'T'HH:mm"
-                        return f.string(from: Date())
-                    }(),
-                    captureSource: source,
-                    status: "processing",
-                    originalText: text.isEmpty ? nil : text
+                let localCapture = Capture(
+                    id: jobID, title: previewTitle,
+                    captureMethod: image != nil ? "photo" : "note",
+                    status: "processing", originalText: text.isEmpty ? nil : text
                 )
-                CaptureHistoryManager.shared.addCapture(captureEntry)
-
+                await CaptureHistoryManager.shared.addLocalCapture(localCapture)
                 CaptureProcessingState.shared.startProcessing(jobID: jobID)
                 PendingJobManager.shared.savePendingJob(jobID: jobID)
             } else if let image {
@@ -163,6 +126,4 @@ struct MainTabView: View {
     }
 }
 
-#Preview {
-    MainTabView()
-}
+#Preview { MainTabView() }

@@ -2,8 +2,6 @@
 //  APIService.swift
 //  CaptureMobile
 //
-//  Created by Maximilian Glasmacher on 17.01.26.
-//
 
 import Foundation
 import UIKit
@@ -12,15 +10,12 @@ import PostHog
 final class APIService {
     static let shared = APIService()
     private init() {}
-    
-    // MARK: - Configuration
+
     private let baseURL = "https://capturemobile-production.up.railway.app"
-    
-    // API Key for backend authentication
-    // IMPORTANT: This must match API_SECRET_KEY in your Railway environment
     private let apiKey = "bad3515c210e9b769dcb3276cb18553ebff1f0b3935c84f4f1d3aedc064c30e4"
-    
+
     // MARK: - Errors
+
     enum APIError: LocalizedError {
         case invalidURL
         case noUserID
@@ -28,380 +23,76 @@ final class APIService {
         case networkError(Error)
         case serverError(Int, String?)
         case decodingFailed(String)
-        case noEventFound(String)
         case rateLimited(String)
         case imageTooLarge
-        case calendarError(String)
-        
+
         var errorDescription: String? {
             switch self {
-            case .invalidURL:
-                return "Invalid URL configuration"
-            case .noUserID:
-                return "Not authenticated. Please sign in again."
-            case .encodingFailed:
-                return "Failed to encode image"
-            case .networkError(let error):
-                return "Network error: \(error.localizedDescription)"
-            case .serverError(let code, let message):
-                return "Server error (\(code)): \(message ?? "Unknown error")"
-            case .decodingFailed(let detail):
-                return "Failed to parse server response: \(detail)"
-            case .noEventFound(let message):
-                return message
-            case .rateLimited(let message):
-                return message
-            case .imageTooLarge:
-                return "Image is too large. Please try a smaller screenshot."
-            case .calendarError(let message):
-                return message
+            case .invalidURL:           return "Invalid URL"
+            case .noUserID:             return "Not authenticated. Please sign in."
+            case .encodingFailed:       return "Failed to encode image"
+            case .networkError(let e):  return "Network error: \(e.localizedDescription)"
+            case .serverError(let c, let m): return "Server error (\(c)): \(m ?? "Unknown")"
+            case .decodingFailed(let d): return "Decoding failed: \(d)"
+            case .rateLimited(let m):   return m
+            case .imageTooLarge:        return "Image too large. Try a smaller screenshot."
             }
         }
     }
-    
+
     // MARK: - Response Models
-    
-    /// Response from backend - contains events to create locally
-    struct AnalyzeResponse: Codable {
-        let success: Bool
-        let eventsToCreate: [ExtractedEventInfo]
-        let message: String
-        
-        enum CodingKeys: String, CodingKey {
-            case success
-            case eventsToCreate = "events_to_create"
-            case message
-        }
-        
-        /// Number of events found
-        var eventCount: Int {
-            return eventsToCreate.count
-        }
-    }
-    
-    /// Event info extracted by backend (matches backend ExtractedEventInfo schema)
-    struct ExtractedEventInfo: Codable {
-        let title: String
-        let date: String
-        let endDate: String?  // For multi-day events (YYYY-MM-DD)
-        let startTime: String?
-        let endTime: String?
-        let location: String?
-        let description: String?
-        let timezone: String?
-        let isAllDay: Bool
-        let isDeadline: Bool
-        let confidence: Double
-        let attendeeName: String?
-        let sourceApp: String?
-        
-        enum CodingKeys: String, CodingKey {
-            case title
-            case date
-            case endDate = "end_date"
-            case startTime = "start_time"
-            case endTime = "end_time"
-            case location
-            case description
-            case timezone
-            case isAllDay = "is_all_day"
-            case isDeadline = "is_deadline"
-            case confidence
-            case attendeeName = "attendee_name"
-            case sourceApp = "source_app"
-        }
-        
-        /// Convert to CalendarService.ExtractedEvent
-        func toCalendarEvent() -> CalendarService.ExtractedEvent {
-            return CalendarService.ExtractedEvent(
-                title: title,
-                date: date,
-                endDate: endDate,
-                startTime: startTime,
-                endTime: endTime,
-                location: location,
-                description: description,
-                timezone: timezone,
-                isAllDay: isAllDay,
-                isDeadline: isDeadline,
-                sourceApp: sourceApp
-            )
-        }
-    }
-    
-    /// Result after creating events locally
-    struct CaptureResult {
-        let eventsCreated: Int
-        let eventsFailed: Int
-        let firstEventTitle: String?
-        let message: String
-    }
-    
-    /// Response from async upload endpoint
+
     struct AsyncUploadResponse: Codable {
         let success: Bool
         let jobId: String
         let message: String
-        
         enum CodingKeys: String, CodingKey {
             case success
             case jobId = "job_id"
             case message
         }
     }
-    
-    /// Response from job status endpoint
+
     struct JobStatusResponse: Codable {
         let jobId: String
-        let status: String  // "processing", "completed", "failed"
-        let eventsToCreate: [ExtractedEventInfo]?
+        let status: String
+        let capture: CaptureRecord?
         let error: String?
-        
         enum CodingKeys: String, CodingKey {
             case jobId = "job_id"
-            case status
-            case eventsToCreate = "events_to_create"
-            case error
+            case status, capture, error
         }
     }
-    
-    // MARK: - Analyze Screenshot
-    /// Sends a screenshot to the backend for analysis and creates events locally
-    /// - Parameter image: The screenshot image to analyze
-    /// - Returns: The capture result with created event info
-    func analyzeAndCreateEvents(_ image: UIImage, source: String = "screenshot") async throws -> CaptureResult {
-        PostHogSDK.shared.capture("screenshot_sent", properties: ["source": source])
-        
-        // Get user ID
-        guard let userID = AppleAuthManager.shared.getUserID() else {
-            PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "no_user_id"
-            ])
-            throw APIError.noUserID
-        }
-        
-        // Encode image to base64
-        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
-            PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "encoding_failed"
-            ])
-            throw APIError.encodingFailed
-        }
-        let base64Image = imageData.base64EncodedString()
-        
-        // Build request
-        guard let url = URL(string: "\(baseURL)/analyze-screenshot") else {
-            PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "invalid_url"
-            ])
-            throw APIError.invalidURL
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        request.timeoutInterval = 120 // 2 minutes for complex screenshots with many events
-        
-        let body: [String: Any] = [
-            "image": base64Image,
-            "user_id": userID,
-            "source": source
-        ]
-        
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await URLSession.shared.data(for: request)
-        } catch {
-            PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "network_error",
-                "details": error.localizedDescription
-            ])
-            throw APIError.networkError(error)
-        }
-        
-        // Check response
-        guard let httpResponse = response as? HTTPURLResponse else {
-            PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "bad_response"
-            ])
-            throw APIError.networkError(URLError(.badServerResponse))
-        }
-        
-        if httpResponse.statusCode != 200 {
-            let errorMessage = String(data: data, encoding: .utf8)
-            PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "server_error",
-                "status_code": httpResponse.statusCode
-            ])
-            
-            // Handle specific error codes
-            switch httpResponse.statusCode {
-            case 429:
-                let message = parseErrorDetail(from: data) ?? "You've reached your daily limit. Try again tomorrow."
-                throw APIError.rateLimited(message)
-            case 413:
-                throw APIError.imageTooLarge
-            default:
-                throw APIError.serverError(httpResponse.statusCode, errorMessage)
-            }
-        }
-        
-        // Decode response
-        let analyzeResponse: AnalyzeResponse
-        do {
-            let decoder = JSONDecoder()
-            analyzeResponse = try decoder.decode(AnalyzeResponse.self, from: data)
-        } catch {
-            let rawBody = String(data: data, encoding: .utf8) ?? "(non-UTF8 data)"
-            print("JSON decode error: \(error)")
-            print("Raw response body: \(rawBody.prefix(500))")
-            PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "decoding_failed",
-                "details": "\(error)"
-            ])
-            throw APIError.decodingFailed("\(error)")
-        }
-        
-        // Check if events were found
-        if !analyzeResponse.success || analyzeResponse.eventsToCreate.isEmpty {
-            PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "no_events_found",
-                "backend_message": analyzeResponse.message
-            ])
-            throw APIError.noEventFound(analyzeResponse.message)
-        }
-        
-        // Create events locally via EventKit
-        let calendarEvents = analyzeResponse.eventsToCreate.map { $0.toCalendarEvent() }
-        let (createdIDs, failedCount) = CalendarService.shared.createEvents(calendarEvents)
-        
-        // Track results
-        if createdIDs.isEmpty {
-            PostHogSDK.shared.capture("event_created_failed", properties: [
-                "error": "calendar_creation_failed",
-                "events_found": analyzeResponse.eventCount
-            ])
-            throw APIError.calendarError("Failed to create events in calendar")
-        }
-        
-        // Track success and add to capture history
-        for (index, event) in analyzeResponse.eventsToCreate.enumerated() where index < createdIDs.count {
-            PostHogSDK.shared.capture("event_created_success", properties: [
-                "event_title": event.title,
-                "event_count": createdIDs.count,
-                "source_app": event.sourceApp ?? "unknown"
-            ])
-            
-            // Add to capture history
-            CaptureHistoryManager.shared.addCapture(event, eventID: createdIDs[index])
-        }
-        
-        // Build result
-        let firstTitle = analyzeResponse.eventsToCreate.first?.title
-        let message: String
-        if createdIDs.count == 1 {
-            message = "Event '\(firstTitle ?? "Event")' created successfully!"
-        } else if failedCount == 0 {
-            message = "Successfully created \(createdIDs.count) events!"
-        } else {
-            message = "Created \(createdIDs.count) of \(analyzeResponse.eventCount) events (\(failedCount) failed)."
-        }
-        
-        return CaptureResult(
-            eventsCreated: createdIDs.count,
-            eventsFailed: failedCount,
-            firstEventTitle: firstTitle,
-            message: message
-        )
-    }
-    
-    // MARK: - Helper Methods
-    /// Parse error detail from JSON response
-    private func parseErrorDetail(from data: Data) -> String? {
-        struct ErrorResponse: Codable {
-            let detail: String
-        }
-        return try? JSONDecoder().decode(ErrorResponse.self, from: data).detail
-    }
-    
-    // MARK: - Health Check
-    /// Checks if the backend is available
-    func healthCheck() async -> Bool {
-        guard let url = URL(string: "\(baseURL)/health") else {
-            return false
-        }
-        
-        do {
-            let (_, response) = try await URLSession.shared.data(from: url)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-            return false
-        }
-    }
-    
-    // MARK: - Async Upload (Push Notification Flow)
-    
-    /// Upload screenshot asynchronously - returns immediately, result comes via push notification
-    /// - Parameters:
-    ///   - image: The screenshot image to analyze
-    ///   - userID: The user's Apple ID
-    /// - Returns: Job ID if upload was accepted, nil if failed
-    func uploadScreenshotAsync(_ image: UIImage, userID: String, source: String = "screenshot", context: String? = nil) async -> String? {
-        PostHogSDK.shared.capture("screenshot_sent", properties: ["source": source])
-        
-        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
-            return nil
-        }
-        
-        guard let url = URL(string: "\(baseURL)/analyze-screenshot-async") else {
-            return nil
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        request.timeoutInterval = 30
-        
-        var body: [String: Any] = [
-            "image": imageData.base64EncodedString(),
-            "user_id": userID,
-            "source": source
-        ]
-        if let context, !context.isEmpty {
-            body["context"] = context
-        }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                return nil
-            }
-            
-            let asyncResponse = try JSONDecoder().decode(AsyncUploadResponse.self, from: data)
-            return asyncResponse.success ? asyncResponse.jobId : nil
-            
-        } catch {
-            print("Async upload failed: \(error)")
-            return nil
-        }
-    }
-    
-    // MARK: - Unified Capture Upload (Notes + Camera)
 
-    /// Upload a capture (image and/or text) for async processing
-    /// The backend intent layer decides whether it goes to Calendar or Notion
+    struct CaptureRecord: Codable {
+        let id: String
+        let captureTitle: String
+        let category: String
+        let captureMethod: String
+        let timeCaptured: String
+        let extractedData: [String: AnyCodable]
+        let imageUrl: String?
+        enum CodingKeys: String, CodingKey {
+            case id
+            case captureTitle = "capture_title"
+            case category
+            case captureMethod = "capture_method"
+            case timeCaptured = "time_captured"
+            case extractedData = "extracted_data"
+            case imageUrl = "image_url"
+        }
+    }
+
+    struct CapturesResponse: Codable {
+        let captures: [CaptureRecord]
+    }
+
+    // MARK: - Upload Capture (async)
+
     func uploadCaptureAsync(image: UIImage?, text: String?, userID: String, source: String = "notes") async -> String? {
         PostHogSDK.shared.capture("capture_sent", properties: ["source": source])
 
-        guard let url = URL(string: "\(baseURL)/analyze-capture-async") else { return nil }
+        guard let url = URL(string: "\(baseURL)/capture") else { return nil }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -409,163 +100,127 @@ final class APIService {
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         request.timeoutInterval = 30
 
-        var body: [String: Any] = [
-            "user_id": userID,
-            "source": source
-        ]
-
-        if let image, let imageData = image.jpegData(compressionQuality: 0.8) {
-            body["image"] = imageData.base64EncodedString()
+        var body: [String: Any] = ["user_id": userID, "source": source]
+        if let image, let data = image.jpegData(compressionQuality: 0.8) {
+            body["image"] = data.base64EncodedString()
         }
         if let text, !text.isEmpty {
             body["text"] = text
         }
-
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else { return nil }
-            let asyncResponse = try JSONDecoder().decode(AsyncUploadResponse.self, from: data)
-            return asyncResponse.success ? asyncResponse.jobId : nil
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            let res = try JSONDecoder().decode(AsyncUploadResponse.self, from: data)
+            return res.success ? res.jobId : nil
         } catch {
             print("Capture upload failed: \(error)")
             return nil
         }
     }
 
-    // MARK: - Job Status (Fallback Recovery)
-    
-    /// Check the status of a pending job
-    /// - Parameter jobID: The job ID to check
-    /// - Returns: Job status response if found, nil if not found or error
-    func checkJobStatus(jobID: String) async -> JobStatusResponse? {
-        guard let url = URL(string: "\(baseURL)/job-status/\(jobID)") else {
-            return nil
+    // MARK: - Get Captures
+
+    func getCaptures(userID: String, category: String? = nil) async -> [CaptureRecord] {
+        var urlString = "\(baseURL)/captures?user_id=\(userID)"
+        if let cat = category, cat != "all" {
+            urlString += "&category=\(cat)"
         }
-        
+        guard let url = URL(string: urlString) else { return [] }
+
         var request = URLRequest(url: url)
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         request.timeoutInterval = 15
-        
+
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                return nil
-            }
-            
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return [] }
+            let res = try JSONDecoder().decode(CapturesResponse.self, from: data)
+            return res.captures
+        } catch {
+            print("Fetch captures failed: \(error)")
+            return []
+        }
+    }
+
+    // MARK: - Job Status
+
+    func checkJobStatus(jobID: String) async -> JobStatusResponse? {
+        guard let url = URL(string: "\(baseURL)/job-status/\(jobID)") else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 15
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
             return try JSONDecoder().decode(JobStatusResponse.self, from: data)
-            
         } catch {
             print("Job status check failed: \(error)")
             return nil
         }
     }
-    
+
     // MARK: - Device Token Registration
-    
-    /// Register device token for push notifications
-    /// - Parameters:
-    ///   - token: The APNs device token (hex string)
-    ///   - userID: The user's Apple ID
+
     func registerDeviceToken(_ token: String, userID: String) async {
-        guard let url = URL(string: "\(baseURL)/register-device") else {
-            return
-        }
-        
+        guard let url = URL(string: "\(baseURL)/register-device") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         request.timeoutInterval = 15
-        
+
         #if DEBUG
         let isSandbox = true
         #else
         let isSandbox = false
         #endif
-        
+
         let body: [String: Any] = ["device_token": token, "user_id": userID, "is_sandbox": isSandbox]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        
+
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    // MARK: - Health Check
+
+    func healthCheck() async -> Bool {
+        guard let url = URL(string: "\(baseURL)/health") else { return false }
         do {
-            _ = try await URLSession.shared.data(for: request)
-            print("Device token registered successfully (sandbox: \(isSandbox))")
-        } catch {
-            print("Failed to register device token: \(error)")
-        }
+            let (_, response) = try await URLSession.shared.data(from: url)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch { return false }
     }
 }
 
-// MARK: - Debug Extension
-#if DEBUG
-extension APIService {
-    /// Mock response for testing without backend (single event)
-    func mockAnalyzeResponse() -> AnalyzeResponse {
-        return AnalyzeResponse(
-            success: true,
-            eventsToCreate: [
-                ExtractedEventInfo(
-                    title: "Team Meeting",
-                    date: "2026-01-20",
-                    endDate: nil,
-                    startTime: "10:00",
-                    endTime: "11:00",
-                    location: "Conference Room A",
-                    description: "Weekly team sync",
-                    timezone: "Europe/Berlin",
-                    isAllDay: false,
-                    isDeadline: false,
-                    confidence: 0.9,
-                    attendeeName: nil,
-                    sourceApp: "WhatsApp"
-                )
-            ],
-            message: "Found event: 'Team Meeting'"
-        )
+// MARK: - AnyCodable (for flexible JSON decoding)
+
+struct AnyCodable: Codable {
+    let value: Any
+
+    init(_ value: Any) { self.value = value }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let b = try? container.decode(Bool.self) { value = b }
+        else if let i = try? container.decode(Int.self) { value = i }
+        else if let d = try? container.decode(Double.self) { value = d }
+        else if let s = try? container.decode(String.self) { value = s }
+        else if let a = try? container.decode([AnyCodable].self) { value = a.map(\.value) }
+        else if let d = try? container.decode([String: AnyCodable].self) { value = d.mapValues(\.value) }
+        else { value = NSNull() }
     }
-    
-    /// Mock response for testing multiple events
-    func mockAnalyzeResponseMultiple() -> AnalyzeResponse {
-        return AnalyzeResponse(
-            success: true,
-            eventsToCreate: [
-                ExtractedEventInfo(
-                    title: "Team Meeting",
-                    date: "2026-01-20",
-                    endDate: nil,
-                    startTime: "10:00",
-                    endTime: "11:00",
-                    location: "Conference Room A",
-                    description: "Weekly team sync",
-                    timezone: "Europe/Berlin",
-                    isAllDay: false,
-                    isDeadline: false,
-                    confidence: 0.9,
-                    attendeeName: nil,
-                    sourceApp: "WhatsApp"
-                ),
-                ExtractedEventInfo(
-                    title: "Lunch with Sarah",
-                    date: "2026-01-20",
-                    endDate: nil,
-                    startTime: "12:30",
-                    endTime: "13:30",
-                    location: "Cafe Berlin",
-                    description: "Catch up over lunch",
-                    timezone: "Europe/Berlin",
-                    isAllDay: false,
-                    isDeadline: false,
-                    confidence: 0.85,
-                    attendeeName: "Sarah",
-                    sourceApp: "iMessage"
-                )
-            ],
-            message: "Found 2 events"
-        )
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch value {
+        case let b as Bool: try container.encode(b)
+        case let i as Int: try container.encode(i)
+        case let d as Double: try container.encode(d)
+        case let s as String: try container.encode(s)
+        default: try container.encodeNil()
+        }
     }
 }
-#endif

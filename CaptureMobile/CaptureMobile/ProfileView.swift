@@ -2,8 +2,6 @@
 //  ProfileView.swift
 //  CaptureMobile
 //
-//  Created by Maximilian Glasmacher on 20.03.26.
-//
 
 import SwiftUI
 import PostHog
@@ -11,22 +9,18 @@ import PostHog
 struct ProfileView: View {
     @ObservedObject var authManager = AppleAuthManager.shared
     @ObservedObject var calendarService = CalendarService.shared
-    @StateObject private var notionManager = NotionManager.shared
     @State private var showManageSheet = false
     @State private var showSetupPopup = false
     @State private var showCalendarPermissionAlert = false
-    @State private var showNotionPagePicker = false
 
     var body: some View {
         ZStack {
-            Color.white
-                .ignoresSafeArea()
+            Color.white.ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 20) {
                     headerView
                     profileCard
-                    notionSection
                     calendarSection
                     footerLink
                 }
@@ -34,15 +28,8 @@ struct ProfileView: View {
                 .padding(.bottom, 100)
             }
         }
-        .sheet(isPresented: $showManageSheet) {
-            ManageAccountSheet()
-        }
-        .sheet(isPresented: $showSetupPopup) {
-            SetupSheet()
-        }
-        .sheet(isPresented: $showNotionPagePicker) {
-            NotionPagePickerSheet(notionManager: notionManager)
-        }
+        .sheet(isPresented: $showManageSheet) { ManageAccountSheet() }
+        .sheet(isPresented: $showSetupPopup) { SetupSheet() }
         .alert("Calendar Access Required", isPresented: $showCalendarPermissionAlert) {
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -56,11 +43,8 @@ struct ProfileView: View {
         .task {
             if !calendarService.hasAccess {
                 let granted = await calendarService.requestAccess()
-                if !granted {
-                    showCalendarPermissionAlert = true
-                }
+                if !granted { showCalendarPermissionAlert = true }
             }
-            await notionManager.checkStatus()
         }
     }
 
@@ -70,9 +54,7 @@ struct ProfileView: View {
         HStack {
             Text("Profile")
                 .font(.system(size: 32, weight: .bold))
-
             Spacer()
-
             Button(action: { showSetupPopup = true }) {
                 Text("Setup")
                     .font(.system(size: 13, weight: .medium))
@@ -92,126 +74,26 @@ struct ProfileView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(authManager.currentUser?.displayName ?? "User")
-                    .font(.system(size: 16, weight: .semibold))
-                    .lineLimit(1)
-
+                    .font(.system(size: 16, weight: .semibold)).lineLimit(1)
                 Text(authManager.currentUser?.displayEmail ?? "")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
             }
-
             Spacer()
-
             Button("Manage") {
                 PostHogSDK.shared.capture("manage_account_opened")
                 showManageSheet = true
             }
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(.black)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 14).padding(.vertical, 8)
             .background(Color.white, in: Capsule())
             .overlay(Capsule().stroke(Color.black.opacity(0.15), lineWidth: 1))
             .buttonStyle(.plain)
         }
         .padding(16)
         .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08)))
         .padding(.horizontal, 20)
-    }
-
-    // MARK: - Notion Section
-
-    private var notionSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 14, weight: .medium))
-                Text("Notion")
-                    .font(.system(size: 15, weight: .semibold))
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-
-            VStack(spacing: 12) {
-                if notionManager.isConnected {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(notionManager.workspaceName ?? "Connected")
-                                .font(.system(size: 15, weight: .medium))
-                            if let pageTitle = notionManager.parentPageTitle {
-                                Text("Saving to: \(pageTitle)")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text("No parent page selected")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-                        Spacer()
-                    }
-                    .padding(16)
-                    .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.black.opacity(0.08), lineWidth: 1))
-
-                    HStack(spacing: 10) {
-                        Button {
-                            Task {
-                                await notionManager.fetchPages()
-                                showNotionPagePicker = true
-                            }
-                        } label: {
-                            Text("Select Page")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(.black)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(Color.white, in: Capsule())
-                                .overlay(Capsule().stroke(Color.black.opacity(0.15), lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            Task { await notionManager.disconnect() }
-                        } label: {
-                            Text("Disconnect")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(.red)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(Color.white, in: Capsule())
-                                .overlay(Capsule().stroke(Color.red.opacity(0.2), lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                } else {
-                    Button {
-                        Task { await notionManager.connect() }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if notionManager.isLoading {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                            } else {
-                                Image(systemName: "link")
-                                    .font(.system(size: 14, weight: .medium))
-                            }
-                            Text("Connect Notion")
-                                .font(.system(size: 15, weight: .medium))
-                        }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.black, in: RoundedRectangle(cornerRadius: 12))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(notionManager.isLoading)
-                }
-            }
-            .padding(.horizontal, 20)
-        }
     }
 
     // MARK: - Calendar Section
@@ -220,20 +102,18 @@ struct ProfileView: View {
         CalendarPickerView()
     }
 
-    // MARK: - Footer Link
+    // MARK: - Footer
 
     private var footerLink: some View {
-        Button(action: {
+        Button {
             PostHogSDK.shared.capture("feedback_tapped")
             if let url = URL(string: "https://maximilianglasmacher.notion.site/2d037e9160b7805faf48c8daed29daa7?pvs=105") {
                 UIApplication.shared.open(url)
             }
-        }) {
+        } label: {
             HStack(spacing: 6) {
-                Image(systemName: "bubble.left")
-                    .font(.system(size: 12))
-                Text("Send Feedback")
-                    .font(.system(size: 13))
+                Image(systemName: "bubble.left").font(.system(size: 12))
+                Text("Send Feedback").font(.system(size: 13))
             }
             .foregroundStyle(.secondary)
         }
@@ -242,61 +122,140 @@ struct ProfileView: View {
     }
 }
 
-// MARK: - Notion Page Picker Sheet
+// MARK: - Manage Account Sheet
 
-struct NotionPagePickerSheet: View {
-    @ObservedObject var notionManager: NotionManager
+struct ManageAccountSheet: View {
+    @ObservedObject var authManager = AppleAuthManager.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var nameText: String = ""
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Display Name")
+                        .font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+                    TextField("Your name", text: $nameText)
+                        .font(.system(size: 16))
+                        .padding(12)
+                        .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 10))
+                }
+
+                Button {
+                    authManager.updateName(nameText)
+                    dismiss()
+                } label: {
+                    Text("Save")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 48)
+                        .background(.black, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+
+                Divider()
+
+                Button(role: .destructive) {
+                    authManager.signOut()
+                    dismiss()
+                } label: {
+                    Text("Sign Out")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.red)
+                }
+
+                Spacer()
+            }
+            .padding(20)
+            .navigationTitle("Manage Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .onAppear {
+            nameText = authManager.currentUser?.displayName ?? ""
+        }
+    }
+}
+
+// MARK: - Setup Sheet
+
+struct SetupSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            List {
-                if notionManager.availablePages.isEmpty {
-                    HStack {
-                        Spacer()
-                        ProgressView()
-                        Spacer()
-                    }
-                    .listRowSeparator(.hidden)
-                } else {
-                    ForEach(notionManager.availablePages) { page in
-                        Button {
-                            Task {
-                                await notionManager.setParentPage(id: page.id, title: page.title)
-                                dismiss()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    setupStep(
+                        number: 1,
+                        title: "Install the Shortcut",
+                        description: "Tap below to add the Capture shortcut, which lets you send screenshots instantly.",
+                        action: {
+                            Button {
+                                ShortcutManager.shared.installShortcut()
+                            } label: {
+                                Text("Install Shortcut")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 16).padding(.vertical, 10)
+                                    .background(.black, in: Capsule())
                             }
-                        } label: {
-                            HStack {
-                                Image(systemName: "doc.text")
-                                    .foregroundStyle(.secondary)
-                                Text(page.title)
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                                if notionManager.parentPageId == page.id {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(.blue)
-                                }
-                            }
+                            .buttonStyle(.plain)
                         }
-                    }
+                    )
+
+                    setupStep(
+                        number: 2,
+                        title: "Assign to Back Tap",
+                        description: "Go to Settings → Accessibility → Touch → Back Tap, then assign \"Capture\" to Double or Triple Tap."
+                    )
+
+                    setupStep(
+                        number: 3,
+                        title: "Capture Anything",
+                        description: "Take a screenshot, double-tap the back of your phone, or use the camera & notes tab to create captures."
+                    )
                 }
+                .padding(20)
             }
-            .navigationTitle("Select Parent Page")
+            .navigationTitle("Setup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
                 }
             }
         }
-        .task {
-            if notionManager.availablePages.isEmpty {
-                await notionManager.fetchPages()
+    }
+
+    @ViewBuilder
+    private func setupStep<Content: View>(
+        number: Int,
+        title: String,
+        description: String,
+        @ViewBuilder action: () -> Content = { EmptyView() }
+    ) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Text("\(number)")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 28, height: 28)
+                .background(.black, in: Circle())
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                Text(description)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                action()
             }
         }
     }
 }
 
-#Preview {
-    ProfileView()
-}
+#Preview { ProfileView() }

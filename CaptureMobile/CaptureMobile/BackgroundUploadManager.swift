@@ -162,7 +162,7 @@ final class BackgroundUploadManager {
             }
             
             // Attempt upload
-            if let jobID = await APIService.shared.uploadScreenshotAsync(image, userID: upload.userID) {
+            if let jobID = await APIService.shared.uploadCaptureAsync(image: image, text: nil, userID: upload.userID, source: "screenshot") {
                 print("BackgroundUploadManager: Upload \(upload.id.prefix(8))... succeeded (job: \(jobID.prefix(8))...)")
                 
                 // Track the new job
