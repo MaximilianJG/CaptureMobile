@@ -110,7 +110,7 @@ Omit any field you cannot confidently fill.
 restaurant → cuisine, location, price_range, rating, dishes, vibe, reservation_info
 clothing   → brand, item_type, color, size, price, material, store, url
 event      → date (YYYY-MM-DD), start_time (HH:MM 24h), end_time, location, description, organizer, is_all_day
-note       → content
+note       → key_info, people, dates, locations, urls, action_items (extract only what is present — do NOT include the raw text itself)
 movie      → genre, director, year, rating, platform, cast, synopsis
 book       → author, genre, year, isbn, publisher, synopsis, rating
 other      → description
