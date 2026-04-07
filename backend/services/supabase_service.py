@@ -70,6 +70,7 @@ class SupabaseService:
         extracted_data: Dict[str, Any],
         image_path: Optional[str] = None,
         tags: Optional[List[str]] = None,
+        content: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Insert a capture row. Returns the created record or None."""
         if not self.client:
@@ -83,6 +84,7 @@ class SupabaseService:
                 "extracted_data": extracted_data,
                 "image_path": image_path,
                 "tags": tags or [],
+                "content": content,
             }
             result = self.client.table("captures").insert(row).execute()
             if result.data:
@@ -91,6 +93,59 @@ class SupabaseService:
             return None
         except Exception as e:
             print(f"  [DB] Insert error: {e}", flush=True)
+            return None
+
+    def update_capture_content(self, capture_id: str, user_id: str, content: str) -> Optional[Dict[str, Any]]:
+        """Update the content field of a capture. Returns the updated record or None."""
+        if not self.client:
+            return None
+        try:
+            result = (
+                self.client.table("captures")
+                .update({"content": content})
+                .eq("id", capture_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if result.data:
+                print(f"  [DB] Updated content for capture: {capture_id[:8]}...", flush=True)
+                return result.data[0]
+            return None
+        except Exception as e:
+            print(f"  [DB] Update content error: {e}", flush=True)
+            return None
+
+    def update_capture_fields(
+        self,
+        capture_id: str,
+        user_id: str,
+        title: str,
+        category: str,
+        extracted_data: Dict[str, Any],
+        tags: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Update AI-derived fields on a capture after reprocessing."""
+        if not self.client:
+            return None
+        try:
+            result = (
+                self.client.table("captures")
+                .update({
+                    "capture_title": title,
+                    "category": category,
+                    "extracted_data": extracted_data,
+                    "tags": tags,
+                })
+                .eq("id", capture_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if result.data:
+                print(f"  [DB] Reprocessed capture: {capture_id[:8]}...", flush=True)
+                return result.data[0]
+            return None
+        except Exception as e:
+            print(f"  [DB] Update fields error: {e}", flush=True)
             return None
 
     def delete_capture(self, capture_id: str, user_id: str) -> bool:

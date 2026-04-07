@@ -24,6 +24,13 @@ class CaptureData(BaseModel):
     extracted_data: Dict[str, Any] = {}
     image_url: Optional[str] = None
     tags: List[str] = []
+    content: Optional[str] = None
+
+
+class UpdateCaptureRequest(BaseModel):
+    """Request body for updating a capture's content."""
+    user_id: str = Field(..., description="Supabase user UUID")
+    content: str = Field(..., description="Updated raw content text")
 
 
 class AsyncCaptureResponse(BaseModel):

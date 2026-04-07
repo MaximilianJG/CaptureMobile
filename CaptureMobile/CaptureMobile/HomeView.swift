@@ -94,8 +94,8 @@ struct RelativeTimeText: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 12))
-            .foregroundStyle(.tertiary)
+            .font(CaptureFont.monoSm)
+            .foregroundStyle(CaptureColors.textHint)
             .onAppear { text = timeAgo(from: date) }
             .onReceive(timer) { _ in text = timeAgo(from: date) }
     }
@@ -122,10 +122,10 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.white.ignoresSafeArea()
+                CaptureColors.bg.ignoresSafeArea()
 
                 ScrollView(showsIndicators: false) {
-                    VStack(spacing: 20) {
+                    VStack(spacing: CaptureSpacing.lg) {
                         headerView
                         categoryChip
 
@@ -161,10 +161,12 @@ struct HomeView: View {
     private var headerView: some View {
         HStack {
             Text("Your Captures")
-                .font(.system(size: 32, weight: .bold))
+                .font(CaptureFont.display)
+                .foregroundStyle(CaptureColors.text)
+                .tracking(-0.5)
             Spacer()
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
     }
 
     // MARK: - Category Chip (Dropdown Menu)
@@ -187,20 +189,22 @@ struct HomeView: View {
                 }
             } label: {
                 HStack(spacing: 6) {
+                    Image(systemName: "line.3.horizontal.decrease")
+                        .font(.system(size: 12))
                     Text(categoryDisplayName(selectedCategory))
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.black)
+                        .font(CaptureFont.caption)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 10))
                 }
+                .foregroundStyle(CaptureColors.primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(Color(red: 0.95, green: 0.91, blue: 0.88), in: Capsule())
+                .background(CaptureColors.primaryMuted, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
+                .overlay(RoundedRectangle(cornerRadius: CaptureRadius.md).stroke(CaptureColors.primary.opacity(0.10)))
             }
             Spacer()
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
     }
 
     private func categoryDisplayName(_ cat: String) -> String {
@@ -212,21 +216,24 @@ struct HomeView: View {
     private var processingCard: some View {
         HStack(spacing: 14) {
             ZStack {
-                Circle().fill(Color.black.opacity(0.1)).frame(width: 32, height: 32)
-                ProgressView().scaleEffect(0.8)
+                Circle().fill(CaptureColors.surface).frame(width: 32, height: 32)
+                ProgressView().scaleEffect(0.8).tint(CaptureColors.primary)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Analyzing capture...")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(CaptureFont.title)
+                    .foregroundStyle(CaptureColors.text)
                 Text("Extracting data")
-                    .font(.system(size: 14)).foregroundStyle(.secondary)
+                    .font(CaptureFont.bodySm)
+                    .foregroundStyle(CaptureColors.textSecondary)
             }
             Spacer()
         }
-        .padding(16)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08)))
-        .padding(.horizontal, 20)
+        .padding(CaptureSpacing.base)
+        .background(CaptureColors.card, in: RoundedRectangle(cornerRadius: CaptureRadius.lg))
+        .overlay(RoundedRectangle(cornerRadius: CaptureRadius.lg).stroke(CaptureColors.border))
+        .captureShadow(.card)
+        .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
     }
 
     // MARK: - Failed Card
@@ -236,43 +243,55 @@ struct HomeView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 16)).foregroundStyle(.white)
                 .frame(width: 32, height: 32)
-                .background(Color.orange, in: RoundedRectangle(cornerRadius: 8))
+                .background(CaptureColors.warning, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
             VStack(alignment: .leading, spacing: 2) {
-                Text("Capture failed").font(.system(size: 16, weight: .semibold))
-                Text("Please try again").font(.system(size: 14)).foregroundStyle(.secondary)
+                Text("Capture failed")
+                    .font(CaptureFont.title)
+                    .foregroundStyle(CaptureColors.text)
+                Text("Please try again")
+                    .font(CaptureFont.bodySm)
+                    .foregroundStyle(CaptureColors.textSecondary)
             }
             Spacer()
             Button { processingState.clearFailure() } label: {
                 Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary).padding(8)
+                    .foregroundStyle(CaptureColors.textTertiary).padding(8)
             }.buttonStyle(.plain)
         }
-        .padding(16)
-        .background(Color.orange.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.orange.opacity(0.15)))
-        .padding(.horizontal, 20)
+        .padding(CaptureSpacing.base)
+        .background(CaptureColors.warningMuted, in: RoundedRectangle(cornerRadius: CaptureRadius.lg))
+        .overlay(RoundedRectangle(cornerRadius: CaptureRadius.lg).stroke(CaptureColors.warning.opacity(0.15)))
+        .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
     }
 
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "camera.viewfinder")
-                .font(.system(size: 40)).foregroundStyle(.tertiary)
+        VStack(spacing: CaptureSpacing.md) {
+            ZStack {
+                RoundedRectangle(cornerRadius: CaptureRadius.xl)
+                    .fill(CaptureColors.text.opacity(0.06))
+                    .frame(width: 56, height: 56)
+                Image(systemName: "camera.viewfinder")
+                    .font(.system(size: 24))
+                    .foregroundStyle(CaptureColors.textTertiary)
+            }
             Text("No captures yet")
-                .font(.system(size: 16, weight: .medium)).foregroundStyle(.secondary)
+                .font(CaptureFont.heading)
+                .foregroundStyle(CaptureColors.textSecondary)
             Text("Take a screenshot, photo, or write a note to get started.")
-                .font(.system(size: 14)).foregroundStyle(.tertiary)
+                .font(CaptureFont.bodySm)
+                .foregroundStyle(CaptureColors.textTertiary)
                 .multilineTextAlignment(.center)
         }
-        .padding(.vertical, 40)
-        .padding(.horizontal, 20)
+        .padding(.vertical, CaptureSpacing.xxxl)
+        .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
     }
 
     // MARK: - Captures List
 
     private var capturesList: some View {
-        LazyVStack(spacing: 16) {
+        LazyVStack(spacing: CaptureSpacing.cardGap) {
             ForEach(captureHistory.captures, id: \.id) { capture in
                 NavigationLink(value: capture.id) {
                     CaptureCardView(capture: capture)
@@ -280,7 +299,7 @@ struct HomeView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
         .navigationDestination(for: String.self) { captureID in
             if let capture = captureHistory.captures.first(where: { $0.id == captureID }) {
                 CaptureDetailView(capture: capture)
@@ -295,29 +314,34 @@ struct CaptureCardView: View {
     let capture: Capture
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: CaptureSpacing.md) {
             HStack(alignment: .top, spacing: 14) {
-                CachedAsyncImage(url: URL(string: capture.imageUrl ?? "")) {
-                    ZStack {
-                        Color(red: 0.96, green: 0.96, blue: 0.96)
-                        Image(systemName: capture.categoryIcon)
-                            .font(.system(size: 22)).foregroundStyle(.tertiary)
+                if let urlStr = capture.imageUrl, let url = URL(string: urlStr) {
+                    CachedAsyncImage(url: url) {
+                        ZStack {
+                            CaptureColors.surface
+                            Image(systemName: capture.categoryIcon)
+                                .font(.system(size: 22)).foregroundStyle(CaptureColors.textTertiary)
+                        }
                     }
+                    .frame(width: 80, height: 90)
+                    .clipShape(RoundedRectangle(cornerRadius: CaptureRadius.lg))
                 }
-                .frame(width: 80, height: 90)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 4) {
                         Text(capture.methodLabel)
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .font(CaptureFont.monoSm)
+                            .foregroundStyle(CaptureColors.textTertiary)
                         Spacer()
                         RelativeTimeText(date: capture.timeCaptured)
                     }
 
                     Text(capture.title)
-                        .font(.system(size: 17, weight: .bold))
+                        .font(CaptureFont.title)
+                        .foregroundStyle(CaptureColors.text)
                         .lineLimit(2)
+                        .minimumScaleFactor(0.8)
 
                     if !capture.tags.isEmpty {
                         TagChipsRow(tags: capture.tags)
@@ -329,9 +353,10 @@ struct CaptureCardView: View {
                 extractedDataView
             }
         }
-        .padding(14)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.06)))
+        .padding(CaptureSpacing.cardPadding)
+        .background(CaptureColors.card, in: RoundedRectangle(cornerRadius: CaptureRadius.lg))
+        .overlay(RoundedRectangle(cornerRadius: CaptureRadius.lg).stroke(CaptureColors.border, lineWidth: 0.5))
+        .captureShadow(.card)
     }
 
     @ViewBuilder
@@ -341,25 +366,31 @@ struct CaptureCardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
                     Image(systemName: "sparkles")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 12))
                     Text("EXTRACTED")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(CaptureFont.monoSection)
+                        .tracking(0.5)
                 }
-                .foregroundStyle(Color(red: 0.7, green: 0.45, blue: 0.3))
+                .foregroundStyle(CaptureColors.primary)
 
                 ForEach(pairs.prefix(3), id: \.key) { pair in
                     HStack {
                         Text(pair.key.capitalized)
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .font(CaptureFont.bodySm)
+                            .foregroundStyle(CaptureColors.textTertiary)
                         Spacer()
                         Text(pair.value)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(CaptureFont.bodySm)
+                            .fontWeight(.medium)
+                            .foregroundStyle(CaptureColors.text)
                             .lineLimit(1)
                     }
+                    .padding(.vertical, 3)
                 }
             }
-            .padding(10)
-            .background(Color(red: 251/255, green: 244/255, blue: 242/255), in: RoundedRectangle(cornerRadius: 10))
+            .padding(CaptureSpacing.extractedPadding)
+            .background(CaptureColors.primaryMuted, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
+            .overlay(RoundedRectangle(cornerRadius: CaptureRadius.md).stroke(CaptureColors.primary.opacity(0.05)))
         }
     }
 
@@ -381,78 +412,99 @@ struct CaptureDetailView: View {
     @ObservedObject var captureHistory = CaptureHistoryManager.shared
     @State private var showFullscreenImage = false
     @State private var showDeleteConfirm = false
+    @State private var editedContent: String = ""
+    @State private var isSavingContent = false
+    @State private var showReanalyzingBanner = false
     @Environment(\.dismiss) private var dismiss
+
+    private var originalContent: String {
+        capture.content
+            ?? (capture.extractedData["content"] as? String)
+            ?? ""
+    }
+
+    private var contentHasChanged: Bool {
+        editedContent != originalContent
+    }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: CaptureSpacing.lg) {
                 if let urlStr = capture.imageUrl, let url = URL(string: urlStr) {
                     CachedAsyncImage(url: url) {
                         ZStack {
-                            Color(red: 0.96, green: 0.96, blue: 0.96)
+                            CaptureColors.surface
                             Image(systemName: capture.categoryIcon)
-                                .font(.system(size: 40)).foregroundStyle(.tertiary)
+                                .font(.system(size: 40)).foregroundStyle(CaptureColors.textTertiary)
                         }
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 300)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(RoundedRectangle(cornerRadius: CaptureRadius.xl))
                     .onTapGesture { showFullscreenImage = true }
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: CaptureSpacing.sm) {
                     Text(capture.title)
-                        .font(.system(size: 26, weight: .bold))
+                        .font(CaptureFont.headingLg)
+                        .foregroundStyle(CaptureColors.text)
 
-                    HStack(spacing: 8) {
+                    HStack(spacing: CaptureSpacing.sm) {
                         Text(capture.methodLabel)
-                            .font(.system(size: 13)).foregroundStyle(.secondary)
-                        Text("·").foregroundStyle(.quaternary)
+                            .font(CaptureFont.monoSm)
+                            .foregroundStyle(CaptureColors.textTertiary)
+                        Text("·").foregroundStyle(CaptureColors.textHint)
                         RelativeTimeText(date: capture.timeCaptured)
                     }
 
                     if !capture.tags.isEmpty {
-                        FlowLayout(spacing: 6) {
+                        FlowLayout(spacing: CaptureSpacing.tagGap) {
                             ForEach(capture.tags, id: \.self) { tag in
                                 Text(tag)
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .background(Color(.systemGray6), in: Capsule())
+                                    .font(CaptureFont.monoXs)
+                                    .foregroundStyle(CaptureColors.textTertiary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(CaptureColors.text.opacity(0.03), in: RoundedRectangle(cornerRadius: CaptureRadius.sm))
                             }
                         }
                     }
+                }
+
+                if capture.content != nil || capture.captureMethod == "note" {
+                    contentSection
                 }
 
                 if !capture.extractedData.isEmpty {
                     detailExtractedData
                 }
 
-                Spacer(minLength: 20)
+                Spacer(minLength: CaptureSpacing.lg)
 
                 Button(role: .destructive) {
                     showDeleteConfirm = true
                 } label: {
                     HStack {
                         Image(systemName: "trash")
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.system(size: 14))
                         Text("Delete Capture")
-                            .font(.system(size: 15, weight: .medium))
+                            .font(CaptureFont.caption)
+                            .fontWeight(.semibold)
                     }
-                    .foregroundStyle(.red)
+                    .foregroundStyle(CaptureColors.danger)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                    .background(CaptureColors.dangerMuted, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
                 }
                 .buttonStyle(.plain)
             }
-            .padding(20)
-            .padding(.bottom, 40)
+            .padding(CaptureSpacing.screenHorizontalFeature)
+            .padding(.bottom, CaptureSpacing.xxxl)
         }
-        .background(Color.white)
+        .background(CaptureColors.bg)
         .navigationBarTitleDisplayMode(.inline)
         .preferredColorScheme(.light)
+        .onAppear { editedContent = originalContent }
         .fullScreenCover(isPresented: $showFullscreenImage) {
             FullscreenImageView(url: URL(string: capture.imageUrl ?? ""))
         }
@@ -469,39 +521,127 @@ struct CaptureDetailView: View {
         }
     }
 
+    // MARK: - Content Section
+
+    @ViewBuilder
+    private var contentSection: some View {
+        VStack(alignment: .leading, spacing: CaptureSpacing.sm) {
+            HStack(spacing: 4) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 12))
+                Text("CONTENT")
+                    .font(CaptureFont.monoSection)
+                    .tracking(0.5)
+            }
+            .foregroundStyle(CaptureColors.textTertiary)
+
+            TextEditor(text: $editedContent)
+                .font(CaptureFont.body)
+                .foregroundStyle(CaptureColors.text)
+                .scrollContentBackground(.hidden)
+                .padding(CaptureSpacing.md)
+                .frame(minHeight: 100)
+                .background(CaptureColors.surface, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
+                .overlay(
+                    RoundedRectangle(cornerRadius: CaptureRadius.md)
+                        .stroke(contentHasChanged ? CaptureColors.primary.opacity(0.3) : CaptureColors.border)
+                )
+
+            if showReanalyzingBanner {
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.7).tint(CaptureColors.primary)
+                    Text("Re-analyzing capture...")
+                        .font(CaptureFont.bodySm)
+                        .foregroundStyle(CaptureColors.textSecondary)
+                }
+                .padding(.vertical, 4)
+            }
+
+            if contentHasChanged {
+                Button {
+                    saveContent()
+                } label: {
+                    HStack(spacing: 6) {
+                        if isSavingContent {
+                            ProgressView().scaleEffect(0.7).tint(.white)
+                        } else {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 14))
+                        }
+                        Text("Save & Re-analyze")
+                            .font(CaptureFont.caption)
+                            .fontWeight(.semibold)
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(CaptureColors.primary, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
+                }
+                .buttonStyle(.plain)
+                .disabled(isSavingContent)
+            }
+        }
+    }
+
+    private func saveContent() {
+        guard let userID = AppleAuthManager.shared.getUserID() else { return }
+        isSavingContent = true
+        Task {
+            let success = await APIService.shared.updateCaptureContent(
+                captureID: capture.id, userID: userID, content: editedContent
+            )
+            await MainActor.run {
+                isSavingContent = false
+                if success {
+                    showReanalyzingBanner = true
+                    Task {
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        await captureHistory.loadCaptures()
+                        await MainActor.run { showReanalyzingBanner = false }
+                    }
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private var detailExtractedData: some View {
         let pairs = allExtractedPairs
         if !pairs.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
                     Image(systemName: "sparkles")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("EXTRACTED DATA")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12))
+                    Text("EXTRACTED")
+                        .font(CaptureFont.monoSection)
+                        .tracking(0.5)
                 }
-                .foregroundStyle(Color(red: 0.7, green: 0.45, blue: 0.3))
+                .foregroundStyle(CaptureColors.primary)
 
                 ForEach(pairs, id: \.key) { pair in
-                    VStack(alignment: .leading, spacing: 2) {
+                    HStack {
                         Text(pair.key.capitalized)
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .font(CaptureFont.bodySm)
+                            .foregroundStyle(CaptureColors.textTertiary)
+                        Spacer()
                         Text(pair.value)
-                            .font(.system(size: 15))
+                            .font(CaptureFont.bodySm)
+                            .fontWeight(.medium)
+                            .foregroundStyle(CaptureColors.text)
+                            .lineLimit(1)
                     }
-                    if pair.key != pairs.last?.key {
-                        Divider()
-                    }
+                    .padding(.vertical, 3)
                 }
             }
-            .padding(16)
-            .background(Color(red: 251/255, green: 244/255, blue: 242/255), in: RoundedRectangle(cornerRadius: 14))
+            .padding(CaptureSpacing.extractedPadding)
+            .background(CaptureColors.primaryMuted, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
+            .overlay(RoundedRectangle(cornerRadius: CaptureRadius.md).stroke(CaptureColors.primary.opacity(0.05)))
         }
     }
 
     private var allExtractedPairs: [(key: String, value: String)] {
         capture.extractedData.compactMap { key, value in
-            if key == "tags" { return nil }
+            if key == "tags" || key == "content" { return nil }
             let str = "\(value)"
             guard !str.isEmpty, str != "<null>" else { return nil }
             return (key: key, value: str)
@@ -573,22 +713,22 @@ struct TagChipsRow: View {
     var body: some View {
         GeometryReader { geo in
             let result = layoutTags(tags, maxWidth: geo.size.width)
-            HStack(spacing: 6) {
+            HStack(spacing: CaptureSpacing.tagGap) {
                 ForEach(result.visible, id: \.self) { tag in
                     Text(tag)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .font(CaptureFont.monoXs)
+                        .foregroundStyle(CaptureColors.textTertiary)
                         .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color(.systemGray6), in: Capsule())
+                        .padding(.vertical, 3)
+                        .background(CaptureColors.text.opacity(0.03), in: RoundedRectangle(cornerRadius: CaptureRadius.sm))
                 }
                 if result.overflow > 0 {
                     Text("+\(result.overflow)")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.tertiary)
+                        .font(CaptureFont.monoXs)
+                        .foregroundStyle(CaptureColors.textHint)
                         .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color(.systemGray6), in: Capsule())
+                        .padding(.vertical, 3)
+                        .background(CaptureColors.text.opacity(0.03), in: RoundedRectangle(cornerRadius: CaptureRadius.sm))
                 }
             }
         }
@@ -618,7 +758,7 @@ struct TagChipsRow: View {
     }
 
     private func textWidth(_ text: String) -> CGFloat {
-        let font = UIFont.systemFont(ofSize: 11, weight: .medium)
+        let font = CaptureFont.uiFont(size: 9.5, weight: .regular)
         let size = (text as NSString).size(withAttributes: [.font: font])
         return ceil(size.width)
     }

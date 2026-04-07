@@ -91,6 +91,7 @@ struct Capture: Identifiable {
     let extractedData: [String: Any]
     let imageUrl: String?
     let tags: [String]
+    let content: String?
 
     var capturedAgo: String {
         let seconds = Date().timeIntervalSince(timeCaptured)
@@ -130,6 +131,7 @@ struct Capture: Identifiable {
         self.extractedData = record.extractedData.mapValues(\.value)
         self.imageUrl = record.imageUrl
         self.tags = record.tags
+        self.content = record.content
 
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -159,16 +161,16 @@ final class CaptureHistoryManager: ObservableObject {
         guard let userID = AppleAuthManager.shared.getUserID() else { return }
 
         let cacheKey = category ?? "all"
-        if captures.isEmpty, let cached = loadFromCache(key: cacheKey) {
+        if let cached = loadFromCache(key: cacheKey) {
             captures = cached.map { Capture(from: $0) }
+        } else {
+            captures = []
         }
 
         isLoading = true
         let records = await APIService.shared.getCaptures(userID: userID, category: category)
-        if !records.isEmpty {
-            captures = records.map { Capture(from: $0) }
-            saveToCache(records, key: cacheKey)
-        }
+        captures = records.map { Capture(from: $0) }
+        saveToCache(records, key: cacheKey)
         isLoading = false
     }
 

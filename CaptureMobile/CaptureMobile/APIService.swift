@@ -73,6 +73,7 @@ final class APIService {
         let extractedData: [String: AnyCodable]
         let imageUrl: String?
         let tags: [String]
+        let content: String?
         enum CodingKeys: String, CodingKey {
             case id
             case captureTitle = "capture_title"
@@ -82,6 +83,7 @@ final class APIService {
             case extractedData = "extracted_data"
             case imageUrl = "image_url"
             case tags
+            case content
         }
 
         init(from decoder: Decoder) throws {
@@ -94,6 +96,7 @@ final class APIService {
             extractedData = try container.decode([String: AnyCodable].self, forKey: .extractedData)
             imageUrl = try container.decodeIfPresent(String.self, forKey: .imageUrl)
             tags = (try? container.decodeIfPresent([String].self, forKey: .tags)) ?? []
+            content = try container.decodeIfPresent(String.self, forKey: .content)
         }
     }
 
@@ -196,6 +199,29 @@ final class APIService {
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {
             print("Delete capture failed: \(error)")
+            return false
+        }
+    }
+
+    // MARK: - Update Capture Content
+
+    func updateCaptureContent(captureID: String, userID: String, content: String) async -> Bool {
+        guard let url = URL(string: "\(baseURL)/captures/\(captureID)") else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 15
+
+        let body: [String: Any] = ["user_id": userID, "content": content]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            print("Update capture content failed: \(error)")
             return false
         }
     }

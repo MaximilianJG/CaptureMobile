@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from models.schemas import (
     CaptureRequest,
     CaptureData,
+    UpdateCaptureRequest,
     AsyncCaptureResponse,
     JobStatusResponse,
     HealthResponse,
@@ -259,6 +260,7 @@ async def process_capture(job_id: str, image: Optional[str], text: Optional[str]
         # Determine capture_method from source
         method_map = {"screenshot": "screenshot", "camera": "photo", "notes": "note"}
         capture_method = method_map.get(source, "note")
+        content_value = text if source == "notes" else None
 
         # Step 5: Save to Supabase
         capture = supabase_service.create_capture(
@@ -269,6 +271,7 @@ async def process_capture(job_id: str, image: Optional[str], text: Optional[str]
             extracted_data=extracted_data,
             image_path=image_path,
             tags=assigned_tags,
+            content=content_value,
         )
 
         if capture:
@@ -285,6 +288,7 @@ async def process_capture(job_id: str, image: Optional[str], text: Optional[str]
                 extracted_data=extracted_data,
                 image_url=image_url,
                 tags=assigned_tags,
+                content=content_value,
             )
 
             pending_jobs[job_id] = {
@@ -396,6 +400,87 @@ async def delete_capture(
     if not success:
         raise HTTPException(status_code=404, detail="Capture not found or already deleted")
     return {"success": True, "message": "Capture deleted"}
+
+
+# ============================================
+# Update Capture Content
+# ============================================
+async def reprocess_capture_content(capture_id: str, content: str, user_id: str):
+    """Background task: re-run AI classify → extract → tags on updated content."""
+    short = capture_id[:8]
+    start = time.time()
+
+    def log(msg: str):
+        ts = datetime.utcnow().strftime("%H:%M:%S")
+        print(f"[{ts}] [reprocess-{short}] {msg}", flush=True)
+
+    log("Reprocessing capture content")
+    try:
+        async with openai_semaphore:
+            classification = await openai_service.classify_category(
+                base64_image=None, text=content, source="notes",
+            )
+        category = classification["category"]
+        title = classification["title"]
+
+        async with openai_semaphore:
+            extracted_data = await openai_service.extract_data(
+                base64_image=None, text=content, category=category, title=title,
+            )
+
+        user_tags_rows = supabase_service.get_user_tags(user_id)
+        available_tag_names = [t["name"] for t in user_tags_rows]
+        assigned_tags: list[str] = []
+        if available_tag_names:
+            async with openai_semaphore:
+                assigned_tags = await openai_service.assign_tags(
+                    available_tags=available_tag_names,
+                    category=category,
+                    title=title,
+                    extracted_data=extracted_data,
+                    base64_image=None,
+                    text=content,
+                )
+
+        supabase_service.update_capture_fields(
+            capture_id=capture_id,
+            user_id=user_id,
+            title=title,
+            category=category,
+            extracted_data=extracted_data,
+            tags=assigned_tags,
+        )
+        log(f"Reprocessed: {category} — \"{title}\"")
+    except Exception as e:
+        import traceback
+        log(f"Reprocess ERROR: {e}")
+        log(traceback.format_exc())
+    finally:
+        log(f"Reprocess done in {time.time() - start:.1f}s")
+
+
+@app.patch("/captures/{capture_id}", tags=["Capture"])
+async def update_capture(
+    capture_id: str,
+    body: UpdateCaptureRequest,
+    background_tasks: BackgroundTasks,
+    _: None = Depends(verify_api_key),
+):
+    """Update a capture's content and re-trigger AI extraction."""
+    updated = supabase_service.update_capture_content(
+        capture_id=capture_id, user_id=body.user_id, content=body.content,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Capture not found")
+
+    background_tasks.add_task(
+        reprocess_capture_content,
+        capture_id=capture_id,
+        content=body.content,
+        user_id=body.user_id,
+    )
+
+    return {"success": True, "message": "Content updated, re-analyzing in background"}
 
 
 # ============================================
