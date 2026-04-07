@@ -28,6 +28,8 @@ from models.schemas import (
     JobStatusResponse,
     HealthResponse,
     RegisterDeviceRequest,
+    CreateTagRequest,
+    TagData,
 )
 from services.openai_service import OpenAIService
 from services.supabase_service import SupabaseService
@@ -234,7 +236,22 @@ async def process_capture(job_id: str, image: Optional[str], text: Optional[str]
                 base64_image=image, text=text, category=category, title=title,
             )
 
-        # Step 3: Upload image (if present)
+        # Step 3: Assign tags from user's library
+        user_tags_rows = supabase_service.get_user_tags(user_id)
+        available_tag_names = [t["name"] for t in user_tags_rows]
+        assigned_tags: list[str] = []
+        if available_tag_names:
+            async with openai_semaphore:
+                assigned_tags = await openai_service.assign_tags(
+                    available_tags=available_tag_names,
+                    category=category,
+                    title=title,
+                    extracted_data=extracted_data,
+                    base64_image=image,
+                    text=text,
+                )
+
+        # Step 4: Upload image (if present)
         image_path = None
         if image:
             image_path = supabase_service.upload_image(user_id, image)
@@ -243,7 +260,7 @@ async def process_capture(job_id: str, image: Optional[str], text: Optional[str]
         method_map = {"screenshot": "screenshot", "camera": "photo", "notes": "note"}
         capture_method = method_map.get(source, "note")
 
-        # Step 4: Save to Supabase
+        # Step 5: Save to Supabase
         capture = supabase_service.create_capture(
             user_id=user_id,
             title=title,
@@ -251,6 +268,7 @@ async def process_capture(job_id: str, image: Optional[str], text: Optional[str]
             method=capture_method,
             extracted_data=extracted_data,
             image_path=image_path,
+            tags=assigned_tags,
         )
 
         if capture:
@@ -266,6 +284,7 @@ async def process_capture(job_id: str, image: Optional[str], text: Optional[str]
                 time_captured=capture["time_captured"],
                 extracted_data=extracted_data,
                 image_url=image_url,
+                tags=assigned_tags,
             )
 
             pending_jobs[job_id] = {
@@ -364,6 +383,22 @@ async def get_job_status(job_id: str, _: None = Depends(verify_api_key)):
 
 
 # ============================================
+# Delete Capture
+# ============================================
+@app.delete("/captures/{capture_id}", tags=["Capture"])
+async def delete_capture(
+    capture_id: str,
+    user_id: str,
+    _: None = Depends(verify_api_key),
+):
+    """Delete a capture and its associated image."""
+    success = supabase_service.delete_capture(capture_id=capture_id, user_id=user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Capture not found or already deleted")
+    return {"success": True, "message": "Capture deleted"}
+
+
+# ============================================
 # Get Captures (for iOS to read)
 # ============================================
 @app.get("/captures", tags=["Capture"])
@@ -376,6 +411,34 @@ async def get_captures(
     """Fetch recent captures for a user with signed image URLs."""
     captures = supabase_service.get_captures(user_id=user_id, limit=limit, category=category)
     return {"captures": captures}
+
+
+# ============================================
+# User Tags
+# ============================================
+@app.get("/tags", tags=["Tags"])
+async def get_tags(user_id: str, _: None = Depends(verify_api_key)):
+    """Fetch user's tag library (seeds defaults on first access)."""
+    tags = supabase_service.get_user_tags(user_id)
+    return {"tags": tags}
+
+
+@app.post("/tags", tags=["Tags"])
+async def create_tag(body: CreateTagRequest, _: None = Depends(verify_api_key)):
+    """Create a new user tag."""
+    tag = supabase_service.create_user_tag(user_id=body.user_id, name=body.name)
+    if not tag:
+        raise HTTPException(status_code=400, detail="Failed to create tag (may already exist)")
+    return {"success": True, "tag": tag}
+
+
+@app.delete("/tags/{tag_id}", tags=["Tags"])
+async def delete_tag(tag_id: str, user_id: str, _: None = Depends(verify_api_key)):
+    """Delete a user tag."""
+    success = supabase_service.delete_user_tag(tag_id=tag_id, user_id=user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Tag not found")
+    return {"success": True, "message": "Tag deleted"}
 
 
 # ============================================

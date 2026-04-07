@@ -72,6 +72,7 @@ final class APIService {
         let timeCaptured: String
         let extractedData: [String: AnyCodable]
         let imageUrl: String?
+        let tags: [String]
         enum CodingKeys: String, CodingKey {
             case id
             case captureTitle = "capture_title"
@@ -80,6 +81,39 @@ final class APIService {
             case timeCaptured = "time_captured"
             case extractedData = "extracted_data"
             case imageUrl = "image_url"
+            case tags
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            captureTitle = try container.decode(String.self, forKey: .captureTitle)
+            category = try container.decode(String.self, forKey: .category)
+            captureMethod = try container.decode(String.self, forKey: .captureMethod)
+            timeCaptured = try container.decode(String.self, forKey: .timeCaptured)
+            extractedData = try container.decode([String: AnyCodable].self, forKey: .extractedData)
+            imageUrl = try container.decodeIfPresent(String.self, forKey: .imageUrl)
+            tags = (try? container.decodeIfPresent([String].self, forKey: .tags)) ?? []
+        }
+    }
+
+    struct UserTag: Codable, Identifiable {
+        let id: String
+        let name: String
+    }
+
+    struct UserTagsResponse: Codable {
+        let tags: [UserTagRecord]
+    }
+
+    struct UserTagRecord: Codable {
+        let id: String
+        let userId: String
+        let name: String
+        enum CodingKeys: String, CodingKey {
+            case id
+            case userId = "user_id"
+            case name
         }
     }
 
@@ -98,11 +132,14 @@ final class APIService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        request.timeoutInterval = 30
+        request.timeoutInterval = 60
 
         var body: [String: Any] = ["user_id": userID, "source": source]
-        if let image, let data = image.jpegData(compressionQuality: 0.8) {
-            body["image"] = data.base64EncodedString()
+        if let image {
+            let resized = Self.resizeForUpload(image, maxDimension: 1920)
+            if let data = resized.jpegData(compressionQuality: 0.7) {
+                body["image"] = data.base64EncodedString()
+            }
         }
         if let text, !text.isEmpty {
             body["text"] = text
@@ -141,6 +178,25 @@ final class APIService {
         } catch {
             print("Fetch captures failed: \(error)")
             return []
+        }
+    }
+
+    // MARK: - Delete Capture
+
+    func deleteCapture(captureID: String, userID: String) async -> Bool {
+        guard let url = URL(string: "\(baseURL)/captures/\(captureID)?user_id=\(userID)") else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 15
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            print("Delete capture failed: \(error)")
+            return false
         }
     }
 
@@ -184,6 +240,64 @@ final class APIService {
         _ = try? await URLSession.shared.data(for: request)
     }
 
+    // MARK: - User Tags
+
+    func getUserTags(userID: String) async -> [UserTag] {
+        guard let url = URL(string: "\(baseURL)/tags?user_id=\(userID)") else { return [] }
+        var request = URLRequest(url: url)
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 15
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return [] }
+            let json = try JSONDecoder().decode(UserTagsResponse.self, from: data)
+            return json.tags.map { UserTag(id: $0.id, name: $0.name) }
+        } catch {
+            print("Fetch tags failed: \(error)")
+            return []
+        }
+    }
+
+    func createUserTag(userID: String, name: String) async -> UserTag? {
+        guard let url = URL(string: "\(baseURL)/tags") else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 15
+
+        let body: [String: Any] = ["user_id": userID, "name": name]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            struct CreateResponse: Codable { let success: Bool; let tag: UserTagRecord }
+            let res = try JSONDecoder().decode(CreateResponse.self, from: data)
+            return UserTag(id: res.tag.id, name: res.tag.name)
+        } catch {
+            print("Create tag failed: \(error)")
+            return nil
+        }
+    }
+
+    func deleteUserTag(tagID: String, userID: String) async -> Bool {
+        guard let url = URL(string: "\(baseURL)/tags/\(tagID)?user_id=\(userID)") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 15
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            print("Delete tag failed: \(error)")
+            return false
+        }
+    }
+
     // MARK: - Health Check
 
     func healthCheck() async -> Bool {
@@ -192,6 +306,17 @@ final class APIService {
             let (_, response) = try await URLSession.shared.data(from: url)
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch { return false }
+    }
+
+    // MARK: - Image Resize
+
+    private static func resizeForUpload(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let size = image.size
+        guard max(size.width, size.height) > maxDimension else { return image }
+        let scale = maxDimension / max(size.width, size.height)
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
     }
 }
 

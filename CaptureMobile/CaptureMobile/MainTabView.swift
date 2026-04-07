@@ -12,14 +12,23 @@ struct MainTabView: View {
     @State private var noteText: String = ""
     @State private var isSending = false
 
-    private var hasContent: Bool {
-        capturedPreview != nil || !noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var hasCameraContent: Bool {
+        capturedPreview != nil
+    }
+
+    private var hasNoteContent: Bool {
+        !noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             TabView(selection: $selectedTab) {
-                NotesView(noteText: $noteText).tag(Tab.notes)
+                NotesView(
+                    noteText: $noteText,
+                    isSending: isSending,
+                    onSend: { sendContent() },
+                    onDismiss: { noteText = "" }
+                ).tag(Tab.notes)
                 CameraView(capturedPreview: $capturedPreview).tag(Tab.camera)
                 HomeView().tag(Tab.captures)
                 ProfileView().tag(Tab.profile)
@@ -29,7 +38,8 @@ struct MainTabView: View {
             .allowsHitTesting(capturedPreview == nil)
 
             Group {
-                if hasContent { sendDismissBar }
+                if hasCameraContent { sendDismissBar }
+                else if selectedTab == .notes && hasNoteContent { EmptyView() }
                 else { FloatingTabBar(selectedTab: $selectedTab) }
             }
             .padding(.bottom, 16)
@@ -85,13 +95,6 @@ struct MainTabView: View {
         let text = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
         let source = image != nil ? "camera" : "notes"
 
-        let previewTitle: String = {
-            if !text.isEmpty {
-                return String(text.components(separatedBy: .newlines).first?.prefix(60) ?? "Note")
-            }
-            return "Photo capture"
-        }()
-
         PostHogSDK.shared.capture("capture_sent", properties: [
             "source": source, "has_image": image != nil, "has_text": !text.isEmpty
         ])
@@ -105,12 +108,6 @@ struct MainTabView: View {
             if let jobID = await APIService.shared.uploadCaptureAsync(
                 image: image, text: text.isEmpty ? nil : text, userID: userID, source: source
             ) {
-                let localCapture = Capture(
-                    id: jobID, title: previewTitle,
-                    captureMethod: image != nil ? "photo" : "note",
-                    status: "processing", originalText: text.isEmpty ? nil : text
-                )
-                await CaptureHistoryManager.shared.addLocalCapture(localCapture)
                 CaptureProcessingState.shared.startProcessing(jobID: jobID)
                 PendingJobManager.shared.savePendingJob(jobID: jobID)
             } else if let image {

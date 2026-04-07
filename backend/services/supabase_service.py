@@ -69,6 +69,7 @@ class SupabaseService:
         method: str,
         extracted_data: Dict[str, Any],
         image_path: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Insert a capture row. Returns the created record or None."""
         if not self.client:
@@ -81,6 +82,7 @@ class SupabaseService:
                 "capture_method": method,
                 "extracted_data": extracted_data,
                 "image_path": image_path,
+                "tags": tags or [],
             }
             result = self.client.table("captures").insert(row).execute()
             if result.data:
@@ -90,6 +92,54 @@ class SupabaseService:
         except Exception as e:
             print(f"  [DB] Insert error: {e}", flush=True)
             return None
+
+    def delete_capture(self, capture_id: str, user_id: str) -> bool:
+        """Delete a capture row and its storage object. Returns True on success."""
+        if not self.client:
+            return False
+        try:
+            row = (
+                self.client.table("captures")
+                .select("image_path")
+                .eq("id", capture_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if not row.data:
+                return False
+
+            image_path = row.data[0].get("image_path")
+
+            self.client.table("captures").delete().eq("id", capture_id).eq("user_id", user_id).execute()
+
+            if image_path:
+                try:
+                    self.client.storage.from_("captures").remove([image_path])
+                except Exception as e:
+                    print(f"  [Storage] Delete warning: {e}", flush=True)
+
+            print(f"  [DB] Deleted capture: {capture_id[:8]}...", flush=True)
+            return True
+        except Exception as e:
+            print(f"  [DB] Delete error: {e}", flush=True)
+            return False
+
+    def get_signed_urls_batch(self, paths: List[str], expires_in: int = 3600) -> Dict[str, Optional[str]]:
+        """Generate signed URLs for multiple paths in a single request."""
+        if not self.client or not paths:
+            return {}
+        try:
+            results = self.client.storage.from_("captures").create_signed_urls(paths, expires_in)
+            url_map: Dict[str, Optional[str]] = {}
+            for item in results:
+                path = item.get("path", "")
+                url = item.get("signedURL") or item.get("signedUrl")
+                if path:
+                    url_map[path] = url
+            return url_map
+        except Exception as e:
+            print(f"  [Storage] Batch signed URL error: {e}", flush=True)
+            return {p: self.get_signed_url(p, expires_in) for p in paths}
 
     def get_captures(
         self, user_id: str, limit: int = 30, category: Optional[str] = None
@@ -111,13 +161,88 @@ class SupabaseService:
             result = query.execute()
             captures = result.data or []
 
+            image_paths = [cap["image_path"] for cap in captures if cap.get("image_path")]
+            url_map = self.get_signed_urls_batch(image_paths) if image_paths else {}
+
             for cap in captures:
-                if cap.get("image_path"):
-                    cap["image_url"] = self.get_signed_url(cap["image_path"])
-                else:
-                    cap["image_url"] = None
+                path = cap.get("image_path")
+                cap["image_url"] = url_map.get(path) if path else None
 
             return captures
         except Exception as e:
             print(f"  [DB] Fetch error: {e}", flush=True)
             return []
+
+    # ------------------------------------------------------------------
+    # User Tags
+    # ------------------------------------------------------------------
+
+    DEFAULT_TAGS = [
+        "Italian", "Sushi", "Brunch", "Cafe", "Fine Dining", "Pizza", "Bar",
+        "Concert", "Meeting", "Birthday", "Conference", "Party", "Sports",
+        "Action", "Comedy", "Drama", "Documentary", "Thriller", "Sci-Fi",
+        "Fiction", "Non-Fiction", "Self-Help", "Biography", "Fantasy",
+        "Shoes", "Jacket", "Dress", "Sneakers", "Accessories", "Streetwear",
+        "Ideas", "Reminder", "Recipe", "Travel", "Inspiration", "Wishlist",
+    ]
+
+    def get_user_tags(self, user_id: str) -> List[Dict[str, Any]]:
+        """Fetch all tags for a user; seeds defaults on first access."""
+        if not self.client:
+            return []
+        try:
+            result = (
+                self.client.table("user_tags")
+                .select("*")
+                .eq("user_id", user_id)
+                .order("name")
+                .execute()
+            )
+            tags = result.data or []
+            if not tags:
+                tags = self._seed_default_tags(user_id)
+            return tags
+        except Exception as e:
+            print(f"  [Tags] Fetch error: {e}", flush=True)
+            return []
+
+    def _seed_default_tags(self, user_id: str) -> List[Dict[str, Any]]:
+        """Insert default tags for a new user."""
+        if not self.client:
+            return []
+        try:
+            rows = [{"user_id": user_id, "name": t} for t in self.DEFAULT_TAGS]
+            result = self.client.table("user_tags").insert(rows).execute()
+            print(f"  [Tags] Seeded {len(result.data or [])} defaults for {user_id[:8]}...", flush=True)
+            return result.data or []
+        except Exception as e:
+            print(f"  [Tags] Seed error: {e}", flush=True)
+            return []
+
+    def create_user_tag(self, user_id: str, name: str) -> Optional[Dict[str, Any]]:
+        """Create a new user tag. Returns the tag or None."""
+        if not self.client:
+            return None
+        try:
+            result = (
+                self.client.table("user_tags")
+                .insert({"user_id": user_id, "name": name})
+                .execute()
+            )
+            if result.data:
+                return result.data[0]
+            return None
+        except Exception as e:
+            print(f"  [Tags] Create error: {e}", flush=True)
+            return None
+
+    def delete_user_tag(self, tag_id: str, user_id: str) -> bool:
+        """Delete a user tag by id."""
+        if not self.client:
+            return False
+        try:
+            self.client.table("user_tags").delete().eq("id", tag_id).eq("user_id", user_id).execute()
+            return True
+        except Exception as e:
+            print(f"  [Tags] Delete error: {e}", flush=True)
+            return False

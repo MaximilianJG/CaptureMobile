@@ -23,6 +23,7 @@ class CaptureData(BaseModel):
     time_captured: str
     extracted_data: Dict[str, Any] = {}
     image_url: Optional[str] = None
+    tags: List[str] = []
 
 
 class AsyncCaptureResponse(BaseModel):
@@ -51,3 +52,16 @@ class RegisterDeviceRequest(BaseModel):
     user_id: str = Field(..., description="Supabase user UUID")
     device_token: str = Field(..., description="APNs device token")
     is_sandbox: bool = Field(default=False, description="True if this is a debug/sandbox build")
+
+
+class CreateTagRequest(BaseModel):
+    """Request body for creating a user tag."""
+    user_id: str = Field(..., description="Supabase user UUID")
+    name: str = Field(..., description="Tag name")
+
+
+class TagData(BaseModel):
+    """A user tag record."""
+    id: str
+    user_id: str
+    name: str

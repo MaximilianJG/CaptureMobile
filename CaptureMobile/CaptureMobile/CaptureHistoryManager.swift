@@ -90,12 +90,7 @@ struct Capture: Identifiable {
     let timeCaptured: Date
     let extractedData: [String: Any]
     let imageUrl: String?
-
-    // Local-only fields for in-flight captures
-    var status: String?
-    var originalText: String?
-
-    var isProcessing: Bool { status == "processing" }
+    let tags: [String]
 
     var capturedAgo: String {
         let seconds = Date().timeIntervalSince(timeCaptured)
@@ -134,26 +129,11 @@ struct Capture: Identifiable {
         self.captureMethod = record.captureMethod
         self.extractedData = record.extractedData.mapValues(\.value)
         self.imageUrl = record.imageUrl
-        self.status = "completed"
-        self.originalText = nil
+        self.tags = record.tags
 
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         self.timeCaptured = fmt.date(from: record.timeCaptured) ?? Date()
-    }
-
-    init(id: String, title: String, category: String = "other", captureMethod: String = "note",
-         timeCaptured: Date = Date(), extractedData: [String: Any] = [:], imageUrl: String? = nil,
-         status: String? = "processing", originalText: String? = nil) {
-        self.id = id
-        self.title = title
-        self.category = category
-        self.captureMethod = captureMethod
-        self.timeCaptured = timeCaptured
-        self.extractedData = extractedData
-        self.imageUrl = imageUrl
-        self.status = status
-        self.originalText = originalText
     }
 }
 
@@ -165,26 +145,31 @@ final class CaptureHistoryManager: ObservableObject {
     @Published var captures: [Capture] = []
     @Published var isLoading = false
 
+    private let cacheDirectory: URL = {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("captures_cache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
     private init() {}
 
     @MainActor
     func loadCaptures(category: String? = nil) async {
         guard let userID = AppleAuthManager.shared.getUserID() else { return }
+
+        let cacheKey = category ?? "all"
+        if captures.isEmpty, let cached = loadFromCache(key: cacheKey) {
+            captures = cached.map { Capture(from: $0) }
+        }
+
         isLoading = true
         let records = await APIService.shared.getCaptures(userID: userID, category: category)
-        let fetched = records.map { Capture(from: $0) }
-
-        // Merge: keep local processing entries, replace completed ones with server data
-        let serverIDs = Set(fetched.map(\.id))
-        let localProcessing = captures.filter { $0.isProcessing && !serverIDs.contains($0.id) }
-        captures = localProcessing + fetched
+        if !records.isEmpty {
+            captures = records.map { Capture(from: $0) }
+            saveToCache(records, key: cacheKey)
+        }
         isLoading = false
-    }
-
-    @MainActor
-    func addLocalCapture(_ capture: Capture) {
-        captures.removeAll { $0.id == capture.id }
-        captures.insert(capture, at: 0)
     }
 
     @MainActor
@@ -193,7 +178,38 @@ final class CaptureHistoryManager: ObservableObject {
     }
 
     @MainActor
+    func deleteCapture(id: String) async {
+        guard let userID = AppleAuthManager.shared.getUserID() else { return }
+        let backup = captures
+        captures.removeAll { $0.id == id }
+        let success = await APIService.shared.deleteCapture(captureID: id, userID: userID)
+        if !success {
+            captures = backup
+        }
+    }
+
+    @MainActor
     func clearHistory() {
         captures = []
+        try? FileManager.default.removeItem(at: cacheDirectory)
+        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+    }
+
+    // MARK: - Disk Cache
+
+    private func cacheURL(for key: String) -> URL {
+        cacheDirectory.appendingPathComponent("\(key).json")
+    }
+
+    private func saveToCache(_ records: [APIService.CaptureRecord], key: String) {
+        DispatchQueue.global(qos: .utility).async {
+            guard let data = try? JSONEncoder().encode(records) else { return }
+            try? data.write(to: self.cacheURL(for: key))
+        }
+    }
+
+    private func loadFromCache(key: String) -> [APIService.CaptureRecord]? {
+        guard let data = try? Data(contentsOf: cacheURL(for: key)) else { return nil }
+        return try? JSONDecoder().decode([APIService.CaptureRecord].self, from: data)
     }
 }

@@ -1,15 +1,16 @@
 """
 OpenAI Service for capture classification and data extraction.
 
-Two-step pipeline:
+Three-step pipeline:
   1. classify_category — determine what kind of capture this is + generate a title
   2. extract_data     — pull structured fields based on the category
+  3. assign_tags      — pick relevant tags from the user's tag library
 """
 
 import os
 import json
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from openai import AsyncOpenAI
 
@@ -109,10 +110,10 @@ Omit any field you cannot confidently fill.
 restaurant → cuisine, location, price_range, rating, dishes, vibe, reservation_info
 clothing   → brand, item_type, color, size, price, material, store, url
 event      → date (YYYY-MM-DD), start_time (HH:MM 24h), end_time, location, description, organizer, is_all_day
-note       → content, tags
+note       → content
 movie      → genre, director, year, rating, platform, cast, synopsis
 book       → author, genre, year, isbn, publisher, synopsis, rating
-other      → description, tags
+other      → description
 
 Respond ONLY with JSON."""
 
@@ -140,6 +141,66 @@ Respond ONLY with JSON."""
         except Exception as e:
             print(f"  [Extract] Error: {e}", flush=True)
             return {}
+
+    # ------------------------------------------------------------------
+    # Step 3 — Assign Tags
+    # ------------------------------------------------------------------
+
+    async def assign_tags(
+        self,
+        available_tags: List[str],
+        category: str,
+        title: str,
+        extracted_data: dict,
+        base64_image: Optional[str] = None,
+        text: Optional[str] = None,
+    ) -> List[str]:
+        """Pick 1-5 tags from the user's available tag library."""
+        if not available_tags:
+            return []
+        try:
+            tag_list = ", ".join(f'"{t}"' for t in available_tags)
+            summary = json.dumps(extracted_data, default=str)[:500]
+
+            system = f"""You assign tags to a capture from the user's tag library.
+
+Category: "{category}"  Title: "{title}"
+Extracted data: {summary}
+
+AVAILABLE TAGS: [{tag_list}]
+
+RULES:
+- Pick 1-5 tags from the available list that best describe this capture.
+- Only use tags from the available list above. Do not invent new ones.
+- Pick fewer tags if only a few are relevant. Quality over quantity.
+
+Respond ONLY with JSON: {{"tags": ["tag1", "tag2", ...]}}"""
+
+            user_content = self._build_user_content(
+                text=text,
+                base64_image=base64_image,
+                prefix="Assign relevant tags to this capture.",
+                detail="low",
+            )
+
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_content},
+                ],
+                max_tokens=200,
+                response_format={"type": "json_object"},
+            )
+
+            result = json.loads(response.choices[0].message.content)
+            tags = [t for t in result.get("tags", []) if t in available_tags]
+            print(f"  [Tags] Assigned {len(tags)} tag(s): {tags}", flush=True)
+            return tags
+
+        except Exception as e:
+            print(f"  [Tags] Error: {e}", flush=True)
+            return []
 
     # ------------------------------------------------------------------
     # Helpers

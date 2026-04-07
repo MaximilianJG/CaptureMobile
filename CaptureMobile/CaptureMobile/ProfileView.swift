@@ -11,6 +11,7 @@ struct ProfileView: View {
     @ObservedObject var calendarService = CalendarService.shared
     @State private var showManageSheet = false
     @State private var showSetupPopup = false
+    @State private var showTagsSheet = false
     @State private var showCalendarPermissionAlert = false
 
     var body: some View {
@@ -21,6 +22,7 @@ struct ProfileView: View {
                 VStack(spacing: 20) {
                     headerView
                     profileCard
+                    tagsRow
                     calendarSection
                     footerLink
                 }
@@ -30,6 +32,7 @@ struct ProfileView: View {
         }
         .sheet(isPresented: $showManageSheet) { ManageAccountSheet() }
         .sheet(isPresented: $showSetupPopup) { SetupSheet() }
+        .sheet(isPresented: $showTagsSheet) { ManageTagsSheet() }
         .alert("Calendar Access Required", isPresented: $showCalendarPermissionAlert) {
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -93,6 +96,39 @@ struct ProfileView: View {
         .padding(16)
         .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08)))
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: - Tags Row
+
+    private var tagsRow: some View {
+        Button {
+            showTagsSheet = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "tag")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.primary)
+                    .frame(width: 32, height: 32)
+                    .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Manage Tags")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.primary)
+                    Text("Add, remove, or organize your tags")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(16)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
         .padding(.horizontal, 20)
     }
 
@@ -254,6 +290,110 @@ struct SetupSheet: View {
                     .foregroundStyle(.secondary)
                 action()
             }
+        }
+    }
+}
+
+// MARK: - Manage Tags Sheet
+
+struct ManageTagsSheet: View {
+    @ObservedObject var tagManager = TagManager.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var newTagName = ""
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                addTagField
+                    .padding(16)
+
+                Divider()
+
+                ScrollView {
+                    if tagManager.tags.isEmpty && !tagManager.isLoading {
+                        VStack(spacing: 8) {
+                            Text("No tags yet")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(.secondary)
+                            Text("Add tags to organize your captures.")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.top, 40)
+                    } else {
+                        FlowLayout(spacing: 8) {
+                            ForEach(tagManager.tags) { tag in
+                                tagChip(tag)
+                            }
+                        }
+                        .padding(16)
+                    }
+                }
+            }
+            .navigationTitle("Manage Tags")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .task {
+            await tagManager.loadTags()
+        }
+    }
+
+    private var addTagField: some View {
+        HStack(spacing: 10) {
+            TextField("New tag name", text: $newTagName)
+                .font(.system(size: 15))
+                .padding(10)
+                .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 10))
+                .submitLabel(.done)
+                .onSubmit { addTag() }
+
+            Button {
+                addTag()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        newTagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? Color.gray : Color.black,
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(newTagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+
+    private func tagChip(_ tag: APIService.UserTag) -> some View {
+        HStack(spacing: 4) {
+            Text(tag.name)
+                .font(.system(size: 14, weight: .medium))
+            Button {
+                Task { await tagManager.deleteTag(id: tag.id) }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.systemGray6), in: Capsule())
+    }
+
+    private func addTag() {
+        let name = newTagName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        Task {
+            await tagManager.createTag(name: name)
+            newTagName = ""
         }
     }
 }
