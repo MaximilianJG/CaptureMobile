@@ -5,6 +5,8 @@ Three-step pipeline:
   1. classify_category — determine what kind of capture this is + generate a title
   2. extract_data     — pull structured fields based on the category
   3. assign_tags      — pick relevant tags from the user's tag library
+
+All prompt text lives in `backend/prompts.py` for easy editing.
 """
 
 import os
@@ -13,6 +15,14 @@ from datetime import datetime
 from typing import Optional, List
 
 from openai import AsyncOpenAI
+
+from prompts import (
+    CLASSIFY_SYSTEM,
+    EXTRACT_SYSTEM,
+    ASSIGN_TAGS_SYSTEM,
+    required_fields_line,
+    fill_required_fields,
+)
 
 
 class OpenAIService:
@@ -34,26 +44,7 @@ class OpenAIService:
         """Return {"category": str, "title": str, "confidence": float}."""
         try:
             today = datetime.now().strftime("%Y-%m-%d")
-
-            system = f"""You classify user captures into a category and generate a short title.
-
-TODAY: {today}
-
-CATEGORIES (pick exactly one):
-- "restaurant" — menus, food photos, dining, restaurant info
-- "clothing"   — fashion items, outfits, brands, style
-- "event"      — meetings, appointments, concerts, anything with a date/time
-- "note"       — general notes, lists, ideas, text info
-- "movie"      — movie posters, film recs, cinema listings, TV shows
-- "book"       — book covers, reading lists, recommendations
-- "other"      — anything else
-
-RULES:
-- Pick the single best category.
-- Generate a concise title (max 60 chars) that names the specific thing,
-  e.g. "Tantris Munich" not "Restaurant Menu".
-
-Respond ONLY with JSON: {{"category":"...","title":"...","confidence":0.0-1.0}}"""
+            system = CLASSIFY_SYSTEM.format(today=today)
 
             user_content = self._build_user_content(
                 text=text,
@@ -101,21 +92,11 @@ Respond ONLY with JSON: {{"category":"...","title":"...","confidence":0.0-1.0}}"
     ) -> dict:
         """Return a flat dict of extracted fields (shape varies by category)."""
         try:
-            system = f"""You extract structured data from a capture.
-Category: "{category}"  Title: "{title}"
-
-Return a flat JSON object with ONLY the relevant fields below.
-Omit any field you cannot confidently fill.
-
-restaurant → cuisine, location, price_range, rating, dishes, vibe, reservation_info
-clothing   → brand, item_type, color, size, price, material, store, url
-event      → date (YYYY-MM-DD), start_time (HH:MM 24h), end_time, location, description, organizer, is_all_day
-note       → key_info, people, dates, locations, urls, action_items (extract only what is present — do NOT include the raw text itself)
-movie      → genre, director, year, rating, platform, cast, synopsis
-book       → author, genre, year, isbn, publisher, synopsis, rating
-other      → description
-
-Respond ONLY with JSON."""
+            system = EXTRACT_SYSTEM.format(
+                category=category,
+                title=title,
+                required_fields_line=required_fields_line(category),
+            )
 
             user_content = self._build_user_content(
                 text=text,
@@ -135,12 +116,17 @@ Respond ONLY with JSON."""
             )
 
             result = json.loads(response.choices[0].message.content)
+            if not isinstance(result, dict):
+                result = {}
+
+            result = fill_required_fields(category, result)
+
             print(f"  [Extract] {len(result)} field(s) for '{category}'", flush=True)
             return result
 
         except Exception as e:
             print(f"  [Extract] Error: {e}", flush=True)
-            return {}
+            return fill_required_fields(category, {})
 
     # ------------------------------------------------------------------
     # Step 3 — Assign Tags
@@ -162,19 +148,12 @@ Respond ONLY with JSON."""
             tag_list = ", ".join(f'"{t}"' for t in available_tags)
             summary = json.dumps(extracted_data, default=str)[:500]
 
-            system = f"""You assign tags to a capture from the user's tag library.
-
-Category: "{category}"  Title: "{title}"
-Extracted data: {summary}
-
-AVAILABLE TAGS: [{tag_list}]
-
-RULES:
-- Pick 1-5 tags from the available list that best describe this capture.
-- Only use tags from the available list above. Do not invent new ones.
-- Pick fewer tags if only a few are relevant. Quality over quantity.
-
-Respond ONLY with JSON: {{"tags": ["tag1", "tag2", ...]}}"""
+            system = ASSIGN_TAGS_SYSTEM.format(
+                category=category,
+                title=title,
+                summary=summary,
+                tag_list=tag_list,
+            )
 
             user_content = self._build_user_content(
                 text=text,

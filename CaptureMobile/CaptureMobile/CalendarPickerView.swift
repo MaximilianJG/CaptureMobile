@@ -15,58 +15,54 @@ struct CalendarPickerView: View {
     @State private var showingPicker = false
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: CaptureSpacing.md) {
             Text("Saving Events To")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(CaptureFont.overline)
+                .foregroundStyle(CaptureColors.textSecondary)
                 .textCase(.uppercase)
-                .padding(.horizontal, 20)
-            
-            // Compact selected calendar display
+                .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
+
             Button(action: { showingPicker = true }) {
                 HStack(spacing: 14) {
-                    // Calendar icon
                     Image(systemName: "calendar")
                         .font(.system(size: 16))
                         .foregroundStyle(.white)
                         .frame(width: 32, height: 32)
-                        .background(Color.black, in: RoundedRectangle(cornerRadius: 8))
-                    
-                    // Source name and calendar
+                        .background(CaptureColors.primary, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
+
                     VStack(alignment: .leading, spacing: 2) {
                         Text(calendarService.selectedCalendar?.source?.title ?? "Select Calendar")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.primary)
+                            .font(CaptureFont.title)
+                            .foregroundStyle(CaptureColors.text)
                             .lineLimit(1)
-                        
-                        // Calendar name with color dot
+
                         if let calendar = calendarService.selectedCalendar {
                             HStack(spacing: 6) {
                                 Circle()
                                     .fill(Color(calendar.uiColor))
                                     .frame(width: 8, height: 8)
-                                
+
                                 Text(calendar.title)
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(.secondary)
+                                    .font(CaptureFont.bodySm)
+                                    .foregroundStyle(CaptureColors.textSecondary)
                                     .lineLimit(1)
                             }
                         }
                     }
-                    
+
                     Spacer()
-                    
-                    // Chevron
+
                     Image(systemName: "chevron.right")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(CaptureColors.textTertiary)
                 }
-                .padding(16)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08), lineWidth: 1))
+                .padding(CaptureSpacing.base)
+                .background(CaptureColors.card, in: RoundedRectangle(cornerRadius: CaptureRadius.lg))
+                .overlay(RoundedRectangle(cornerRadius: CaptureRadius.lg).stroke(CaptureColors.border, lineWidth: 0.5))
+                .captureShadow(.card)
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
         }
         .sheet(isPresented: $showingPicker) {
             CalendarPickerSheet()
@@ -95,22 +91,21 @@ struct CalendarPickerSheet: View {
             ScrollView {
                 VStack(spacing: 20) {
                     if calendarService.calendars.isEmpty {
-                        // No calendars available
-                        VStack(spacing: 12) {
+                        VStack(spacing: CaptureSpacing.md) {
                             Image(systemName: "calendar.badge.exclamationmark")
                                 .font(.system(size: 40))
-                                .foregroundStyle(.secondary)
-                            
+                                .foregroundStyle(CaptureColors.textSecondary)
+
                             Text("No calendars available")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(.secondary)
-                            
+                                .font(CaptureFont.heading)
+                                .foregroundStyle(CaptureColors.textSecondary)
+
                             Text("Please grant calendar access in Settings")
-                                .font(.system(size: 14))
-                                .foregroundStyle(.tertiary)
+                                .font(CaptureFont.bodySm)
+                                .foregroundStyle(CaptureColors.textTertiary)
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 40)
+                        .padding(.vertical, CaptureSpacing.xxxl)
                     } else {
                         // Grouped calendar list
                         ForEach(groupedCalendars, id: \.source.sourceIdentifier) { source, calendars in
@@ -130,29 +125,28 @@ struct CalendarPickerSheet: View {
                         }
                     }
                     
-                    // Help link
-                    VStack(spacing: 4) {
+                    VStack(spacing: CaptureSpacing.xs) {
                         Button(action: openCalendarSettings) {
                             HStack(spacing: 6) {
                                 Image(systemName: "gear")
                                     .font(.system(size: 14))
                                 Text("Don't see your calendar? Add it in Settings")
-                                    .font(.system(size: 14))
+                                    .font(CaptureFont.bodySm)
                             }
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(CaptureColors.textSecondary)
                         }
                         .buttonStyle(.plain)
-                        
+
                         Text("Settings → Calendar → Accounts → Add Account")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
+                            .font(CaptureFont.monoXs)
+                            .foregroundStyle(CaptureColors.textTertiary)
                     }
-                    .padding(.top, 8)
-                    .padding(.bottom, 20)
+                    .padding(.top, CaptureSpacing.sm)
+                    .padding(.bottom, CaptureSpacing.lg)
                 }
                 .padding(.top, 16)
             }
-            .background(Color.white)
+            .background(CaptureColors.bg)
             .navigationTitle("Select Calendar")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -207,15 +201,13 @@ private struct CalendarSourceSection: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Section header
+        VStack(alignment: .leading, spacing: CaptureSpacing.sm) {
             Text(sectionTitle)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(CaptureFont.overline)
+                .foregroundStyle(CaptureColors.textSecondary)
                 .textCase(.uppercase)
-                .padding(.horizontal, 20)
-            
-            // Calendar rows
+                .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
+
             VStack(spacing: 0) {
                 ForEach(calendars, id: \.calendarIdentifier) { calendar in
                     CalendarRow(
@@ -223,15 +215,15 @@ private struct CalendarSourceSection: View {
                         isSelected: calendar.calendarIdentifier == selectedID,
                         onSelect: { onSelect(calendar) }
                     )
-                    
+
                     if calendar.calendarIdentifier != calendars.last?.calendarIdentifier {
-                        Divider().padding(.leading, 52)
+                        Divider().padding(.leading, 52).foregroundStyle(CaptureColors.border)
                     }
                 }
             }
-            .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08), lineWidth: 1))
-            .padding(.horizontal, 20)
+            .background(CaptureColors.card, in: RoundedRectangle(cornerRadius: CaptureRadius.lg))
+            .overlay(RoundedRectangle(cornerRadius: CaptureRadius.lg).stroke(CaptureColors.border, lineWidth: 0.5))
+            .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
         }
     }
 }
@@ -245,28 +237,25 @@ private struct CalendarRow: View {
     
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 12) {
-                // Calendar color indicator
+            HStack(spacing: CaptureSpacing.md) {
                 Circle()
                     .fill(Color(calendar.uiColor))
                     .frame(width: 12, height: 12)
-                
-                // Calendar name
+
                 Text(calendar.title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .font(CaptureFont.title)
+                    .foregroundStyle(CaptureColors.text)
                     .lineLimit(1)
-                
+
                 Spacer()
-                
-                // Selection indicator
+
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.black)
+                        .foregroundStyle(CaptureColors.primary)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, CaptureSpacing.base)
             .padding(.vertical, 14)
             .contentShape(Rectangle())
         }

@@ -111,6 +111,21 @@ struct Capture: Identifiable {
         }
     }
 
+    /// Classification label for the capture (what the AI decided this is).
+    /// Example: "Restaurant", "Event", "Movie", "Note".
+    var categoryLabel: String {
+        switch category {
+        case "restaurant": return "Restaurant"
+        case "clothing":   return "Clothing"
+        case "event":      return "Event"
+        case "note":       return "Note"
+        case "movie":      return "Movie"
+        case "book":       return "Book"
+        case "other":      return "Other"
+        default:           return category.capitalized
+        }
+    }
+
     var categoryIcon: String {
         switch category {
         case "restaurant": return "fork.knife"
@@ -172,6 +187,18 @@ final class CaptureHistoryManager: ObservableObject {
         captures = records.map { Capture(from: $0) }
         saveToCache(records, key: cacheKey)
         isLoading = false
+
+        // Fire-and-forget: attempt to create calendar events for any new
+        // event-category captures. The helper dedupes by capture ID via
+        // UserDefaults so this is safe to call on every refresh.
+        let eventCaptures = captures.filter { $0.category == "event" }
+        if !eventCaptures.isEmpty {
+            Task {
+                for capture in eventCaptures {
+                    await CalendarService.shared.createEventFromCapture(capture)
+                }
+            }
+        }
     }
 
     @MainActor

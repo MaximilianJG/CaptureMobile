@@ -8,5 +8,14 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>LibreFranklin-Regular.ttf</string>
+		<string>LibreFranklin-Medium.ttf</string>
+		<string>LibreFranklin-SemiBold.ttf</string>
+		<string>LibreFranklin-Bold.ttf</string>
+		<string>JetBrainsMono-Regular.ttf</string>
+		<string>JetBrainsMono-Medium.ttf</string>
+	</array>
 </dict>
 </plist>

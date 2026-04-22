@@ -14,75 +14,70 @@ struct AuthView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Subtle gradient background
                 LinearGradient(
-                    colors: [
-                        Color(red: 0.98, green: 0.98, blue: 0.99),
-                        Color.white
-                    ],
+                    colors: [CaptureColors.bg, CaptureColors.card],
                     startPoint: .top,
                     endPoint: .bottom
                 )
                 .ignoresSafeArea()
-                
+
                 VStack(spacing: 0) {
                     Spacer()
                         .frame(height: geometry.size.height * 0.12)
-                    
-                    // Header
+
                     VStack(spacing: 10) {
                         Text("Capture")
-                            .font(.system(size: 48, weight: .bold))
-                            .foregroundStyle(.black)
-                        
+                            .font(CaptureFont.display)
+                            .tracking(-0.8)
+                            .foregroundStyle(CaptureColors.text)
+
                         VStack(spacing: 2) {
                             Text("Create events from")
                             Text("anywhere")
                         }
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(.secondary)
+                        .font(CaptureFont.headingLg)
+                        .foregroundStyle(CaptureColors.textSecondary)
                         .multilineTextAlignment(.center)
                     }
-                    
+
                     Spacer()
                         .frame(height: geometry.size.height * 0.05)
-                    
-                    // Logo - bigger
+
                     Image("CaptureLogoWhite")
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(width: min(geometry.size.width * 0.6, 280))
-                    
+
                     Spacer()
-                    
-                    // Sign in button
-                    VStack(spacing: 20) {
+
+                    VStack(spacing: CaptureSpacing.lg) {
                         if authManager.isLoading {
                             ProgressView()
                                 .controlSize(.large)
+                                .tint(CaptureColors.primary)
                         } else {
                             Button(action: {
                                 authManager.signIn()
                             }) {
-                                HStack(spacing: 8) {
+                                HStack(spacing: CaptureSpacing.sm) {
                                     Image(systemName: "apple.logo")
-                                        .font(.system(size: 18, weight: .medium))
+                                        .font(.system(size: 18))
                                     Text("Sign in with Apple")
-                                        .font(.system(size: 18, weight: .semibold))
+                                        .font(CaptureFont.heading)
                                 }
                                 .foregroundStyle(.white)
                                 .frame(width: 260, height: 54)
-                                .background(.black, in: Capsule())
+                                .background(CaptureColors.text, in: Capsule())
                             }
                             .buttonStyle(.plain)
                         }
-                        
+
                         if let error = authManager.errorMessage {
                             Text(error)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.red)
+                                .font(CaptureFont.body)
+                                .foregroundStyle(CaptureColors.danger)
                                 .multilineTextAlignment(.center)
-                                .padding(.horizontal, 32)
+                                .padding(.horizontal, CaptureSpacing.xxl)
                         }
                     }
                     .padding(.bottom, 50)

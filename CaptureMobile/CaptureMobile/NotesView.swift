@@ -6,13 +6,11 @@ import SwiftUI
 
 struct NotesView: View {
     @ObservedObject var authManager = AppleAuthManager.shared
-    @ObservedObject var processingState = CaptureProcessingState.shared
     @Binding var noteText: String
     @FocusState private var isEditorFocused: Bool
 
     var isSending: Bool
     var onSend: () -> Void
-    var onDismiss: () -> Void
 
     private var hasText: Bool {
         !noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -20,22 +18,16 @@ struct NotesView: View {
 
     var body: some View {
         ZStack {
-            Color.white.ignoresSafeArea()
+            CaptureColors.bg.ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 0) {
                 headerSection
-                    .padding(.top, 16)
-                    .padding(.horizontal, 24)
-
-                if processingState.isProcessing && !processingState.hasPendingFailure {
-                    processingBanner
-                        .padding(.top, 12)
-                        .padding(.horizontal, 24)
-                }
+                    .padding(.top, CaptureSpacing.base)
+                    .padding(.horizontal, CaptureSpacing.xl)
 
                 editor
-                    .padding(.top, 12)
-                    .padding(.horizontal, 20)
+                    .padding(.top, CaptureSpacing.md)
+                    .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
             }
         }
         .onTapGesture {
@@ -48,84 +40,79 @@ struct NotesView: View {
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(greetingWithName)
-                .font(.system(size: 32, weight: .bold))
-                .foregroundStyle(.primary)
+                .font(CaptureFont.display)
+                .foregroundStyle(CaptureColors.text)
+                .tracking(-0.5)
 
             Text(formattedDateTime)
-                .font(.system(size: 13))
-                .foregroundStyle(.tertiary)
+                .font(CaptureFont.monoSm)
+                .foregroundStyle(CaptureColors.textTertiary)
                 .padding(.top, 2)
         }
-    }
-
-    // MARK: - Processing Banner
-
-    private var processingBanner: some View {
-        HStack(spacing: 10) {
-            ProgressView().scaleEffect(0.7)
-            Text("Analyzing capture...")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Color.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
     }
 
     // MARK: - Editor
 
     private var editor: some View {
         TextEditor(text: $noteText)
-            .font(.system(size: 17))
-            .foregroundStyle(.primary)
+            .font(CaptureFont.heading)
+            .foregroundStyle(CaptureColors.text)
             .scrollContentBackground(.hidden)
             .focused($isEditorFocused)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.bottom, 60)
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     if hasText {
-                        keyboardSendBar
+                        keyboardSaveBar
                     }
                 }
             }
     }
 
-    // MARK: - Keyboard Send Bar
+    // MARK: - Keyboard Save Bar
 
-    private var keyboardSendBar: some View {
+    private var keyboardSaveBar: some View {
         HStack(spacing: 0) {
             Button {
-                onDismiss()
                 isEditorFocused = false
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.primary)
-                    .frame(width: 44).padding(.vertical, 6)
+                    .foregroundColor(CaptureColors.textSecondary)
+                    .frame(width: 44)
+                    .padding(.vertical, 6)
             }
             .buttonStyle(.plain)
 
             Button {
-                onSend()
-                isEditorFocused = false
+                saveAndContinue()
             } label: {
                 HStack(spacing: 6) {
                     if isSending {
                         ProgressView().scaleEffect(0.7).tint(.white)
                     } else {
-                        Text("Send").font(.system(size: 14, weight: .semibold))
-                        Image(systemName: "arrow.right").font(.system(size: 12, weight: .semibold))
+                        Text("Save").font(.system(size: 15, weight: .bold))
                     }
                 }
                 .foregroundColor(.white)
-                .frame(maxWidth: .infinity).padding(.vertical, 8)
-                .background(Color.black, in: Capsule())
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(CaptureColors.primary, in: Capsule())
             }
             .buttonStyle(.plain)
             .disabled(isSending)
         }
+    }
+
+    // MARK: - Actions
+
+    private func saveAndContinue() {
+        guard hasText else { return }
+        onSend()
+        // Clear the text immediately for the next note; keep focus so the
+        // user can start typing again without tapping again.
+        noteText = ""
+        isEditorFocused = true
     }
 
     // MARK: - Helpers

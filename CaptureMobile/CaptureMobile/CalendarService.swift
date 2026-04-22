@@ -270,6 +270,91 @@ final class CalendarService: ObservableObject {
         return event.eventIdentifier
     }
     
+    /// Build an `ExtractedEvent` from a `Capture`'s extracted data and create
+    /// the calendar event if access is granted. Requests calendar access
+    /// on the first call if the user hasn't been prompted yet.
+    ///
+    /// De-duplicates based on `capture.id` so the same capture will not produce
+    /// multiple calendar events across app relaunches / refreshes.
+    ///
+    /// Returns the newly-created event identifier, or nil if the event was
+    /// already created, access was denied, or required data is absent.
+    @discardableResult
+    func createEventFromCapture(_ capture: Capture) async -> String? {
+        let dedupeKey = "calendar_event_created_capture_ids"
+        var created = UserDefaults.standard.stringArray(forKey: dedupeKey) ?? []
+        if created.contains(capture.id) {
+            print("[Calendar] Skipping \(capture.id): already created")
+            return nil
+        }
+
+        // Log what we received from the backend so we can debug missing fields.
+        let previewData = capture.extractedData.mapValues { "\($0)" }
+        print("[Calendar] Attempting event for capture \(capture.id) — category=\(capture.category), title=\(capture.title), data=\(previewData)")
+
+        // If the user hasn't been prompted for calendar access yet, prompt now.
+        if EKEventStore.authorizationStatus(for: .event) == .notDetermined {
+            print("[Calendar] Requesting calendar access...")
+            let granted = await requestAccess()
+            print("[Calendar] Access granted: \(granted)")
+        }
+
+        guard hasAccess else {
+            print("[Calendar] Skipping \(capture.id): no calendar access (status=\(EKEventStore.authorizationStatus(for: .event).rawValue))")
+            return nil
+        }
+
+        let data = capture.extractedData
+
+        func str(_ key: String) -> String? {
+            guard let value = data[key] else { return nil }
+            if let s = value as? String {
+                let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty || trimmed.lowercased() == "not found" { return nil }
+                return trimmed
+            }
+            return nil
+        }
+
+        func bool(_ key: String) -> Bool {
+            if let v = data[key] as? Bool { return v }
+            if let v = data[key] as? String {
+                return ["true", "yes", "1"].contains(v.lowercased())
+            }
+            return false
+        }
+
+        guard let dateStr = str("date") else {
+            print("[Calendar] Skipping \(capture.id): no date field in extracted_data")
+            return nil
+        }
+
+        let event = ExtractedEvent(
+            title: capture.title,
+            date: dateStr,
+            endDate: str("end_date"),
+            startTime: str("start_time"),
+            endTime: str("end_time"),
+            location: str("location"),
+            description: str("description"),
+            timezone: str("timezone"),
+            isAllDay: bool("is_all_day"),
+            isDeadline: bool("is_deadline"),
+            sourceApp: str("source_app")
+        )
+
+        do {
+            let identifier = try createEvent(event)
+            created.append(capture.id)
+            UserDefaults.standard.set(created, forKey: dedupeKey)
+            print("[Calendar] Created event for capture \(capture.id): \(identifier)")
+            return identifier
+        } catch {
+            print("[Calendar] Failed to create event for capture \(capture.id): \(error)")
+            return nil
+        }
+    }
+
     /// Create multiple events, returns array of created event identifiers
     func createEvents(_ events: [ExtractedEvent]) -> (created: [String], failed: Int) {
         var createdIDs: [String] = []

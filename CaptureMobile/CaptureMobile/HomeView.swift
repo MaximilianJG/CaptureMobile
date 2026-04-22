@@ -314,29 +314,15 @@ struct CaptureCardView: View {
     let capture: Capture
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CaptureSpacing.md) {
-            HStack(alignment: .top, spacing: 14) {
-                if let urlStr = capture.imageUrl, let url = URL(string: urlStr) {
-                    CachedAsyncImage(url: url) {
-                        ZStack {
-                            CaptureColors.surface
-                            Image(systemName: capture.categoryIcon)
-                                .font(.system(size: 22)).foregroundStyle(CaptureColors.textTertiary)
-                        }
-                    }
-                    .frame(width: 80, height: 90)
-                    .clipShape(RoundedRectangle(cornerRadius: CaptureRadius.lg))
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 4) {
+                categoryPillSmall
+                Spacer()
+                RelativeTimeText(date: capture.timeCaptured)
+            }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 4) {
-                        Text(capture.methodLabel)
-                            .font(CaptureFont.monoSm)
-                            .foregroundStyle(CaptureColors.textTertiary)
-                        Spacer()
-                        RelativeTimeText(date: capture.timeCaptured)
-                    }
-
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text(capture.title)
                         .font(CaptureFont.title)
                         .foregroundStyle(CaptureColors.text)
@@ -347,10 +333,20 @@ struct CaptureCardView: View {
                         TagChipsRow(tags: capture.tags)
                     }
                 }
-            }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            if !capture.extractedData.isEmpty {
-                extractedDataView
+                if let urlStr = capture.imageUrl, let url = URL(string: urlStr) {
+                    CachedAsyncImage(url: url) {
+                        ZStack {
+                            CaptureColors.surface
+                            Image(systemName: capture.categoryIcon)
+                                .font(.system(size: 16))
+                                .foregroundStyle(CaptureColors.textTertiary)
+                        }
+                    }
+                    .frame(width: 46, height: 46)
+                    .clipShape(RoundedRectangle(cornerRadius: CaptureRadius.md))
+                }
             }
         }
         .padding(CaptureSpacing.cardPadding)
@@ -359,49 +355,18 @@ struct CaptureCardView: View {
         .captureShadow(.card)
     }
 
-    @ViewBuilder
-    private var extractedDataView: some View {
-        let pairs = extractedDataPairs
-        if !pairs.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 4) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 12))
-                    Text("EXTRACTED")
-                        .font(CaptureFont.monoSection)
-                        .tracking(0.5)
-                }
-                .foregroundStyle(CaptureColors.primary)
-
-                ForEach(pairs.prefix(3), id: \.key) { pair in
-                    HStack {
-                        Text(pair.key.capitalized)
-                            .font(CaptureFont.bodySm)
-                            .foregroundStyle(CaptureColors.textTertiary)
-                        Spacer()
-                        Text(pair.value)
-                            .font(CaptureFont.bodySm)
-                            .fontWeight(.medium)
-                            .foregroundStyle(CaptureColors.text)
-                            .lineLimit(1)
-                    }
-                    .padding(.vertical, 3)
-                }
-            }
-            .padding(CaptureSpacing.extractedPadding)
-            .background(CaptureColors.primaryMuted, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
-            .overlay(RoundedRectangle(cornerRadius: CaptureRadius.md).stroke(CaptureColors.primary.opacity(0.05)))
+    private var categoryPillSmall: some View {
+        HStack(spacing: 5) {
+            Image(systemName: capture.categoryIcon)
+                .font(.system(size: 9, weight: .semibold))
+            Text(capture.categoryLabel.uppercased())
+                .font(CaptureFont.monoSection)
+                .tracking(0.8)
         }
-    }
-
-    private var extractedDataPairs: [(key: String, value: String)] {
-        capture.extractedData.compactMap { key, value in
-            if key == "tags" { return nil }
-            let str = "\(value)"
-            guard !str.isEmpty, str != "<null>", str.count < 100 else { return nil }
-            return (key: key, value: str)
-        }
-        .sorted { $0.key < $1.key }
+        .foregroundStyle(CaptureColors.primary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(CaptureColors.primaryMuted, in: Capsule())
     }
 }
 
@@ -415,7 +380,13 @@ struct CaptureDetailView: View {
     @State private var editedContent: String = ""
     @State private var isSavingContent = false
     @State private var showReanalyzingBanner = false
+    @State private var showDetailsSheet = false
+    @FocusState private var isEditorFocused: Bool
     @Environment(\.dismiss) private var dismiss
+
+    private var isNote: Bool {
+        capture.captureMethod == "note" || capture.category == "note"
+    }
 
     private var originalContent: String {
         capture.content
@@ -428,6 +399,128 @@ struct CaptureDetailView: View {
     }
 
     var body: some View {
+        Group {
+            if isNote {
+                noteLayout
+            } else {
+                standardLayout
+            }
+        }
+        .background(CaptureColors.bg)
+        .navigationBarTitleDisplayMode(.inline)
+        .preferredColorScheme(.light)
+        .onAppear { editedContent = originalContent }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showDeleteConfirm = true } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(CaptureColors.danger)
+                }
+            }
+        }
+        .fullScreenCover(isPresented: $showFullscreenImage) {
+            FullscreenImageView(url: URL(string: capture.imageUrl ?? ""))
+        }
+        .sheet(isPresented: $showDetailsSheet) {
+            CaptureDetailsSheet(capture: capture)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .alert("Delete Capture", isPresented: $showDeleteConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                Task {
+                    await captureHistory.deleteCapture(id: capture.id)
+                    dismiss()
+                }
+            }
+        } message: {
+            Text("Are you sure you want to delete this capture? This cannot be undone.")
+        }
+    }
+
+    // MARK: - Note Layout (new-note canvas style)
+
+    private var noteLayout: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: CaptureSpacing.sm) {
+                pillRow
+
+                Text(capture.title)
+                    .font(CaptureFont.display)
+                    .foregroundStyle(CaptureColors.text)
+                    .tracking(-0.5)
+            }
+            .padding(.top, CaptureSpacing.base)
+            .padding(.horizontal, CaptureSpacing.xl)
+
+            if showReanalyzingBanner {
+                reanalyzingBanner
+                    .padding(.top, CaptureSpacing.md)
+                    .padding(.horizontal, CaptureSpacing.xl)
+            }
+
+            noteEditor
+                .padding(.top, CaptureSpacing.md)
+                .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
+        }
+        .onTapGesture { isEditorFocused = true }
+    }
+
+    private var noteEditor: some View {
+        TextEditor(text: $editedContent)
+            .font(CaptureFont.heading)
+            .foregroundStyle(CaptureColors.text)
+            .scrollContentBackground(.hidden)
+            .focused($isEditorFocused)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    if contentHasChanged {
+                        noteEditorSaveBar
+                    }
+                }
+            }
+    }
+
+    private var noteEditorSaveBar: some View {
+        HStack(spacing: 0) {
+            Button {
+                isEditorFocused = false
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(CaptureColors.textSecondary)
+                    .frame(width: 44)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                saveContent()
+                isEditorFocused = false
+            } label: {
+                HStack(spacing: 6) {
+                    if isSavingContent {
+                        ProgressView().scaleEffect(0.7).tint(.white)
+                    } else {
+                        Text("Save").font(.system(size: 15, weight: .bold))
+                    }
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(CaptureColors.primary, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isSavingContent)
+        }
+    }
+
+    // MARK: - Standard Layout (non-note captures)
+
+    private var standardLayout: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: CaptureSpacing.lg) {
                 if let urlStr = capture.imageUrl, let url = URL(string: urlStr) {
@@ -445,146 +538,80 @@ struct CaptureDetailView: View {
                 }
 
                 VStack(alignment: .leading, spacing: CaptureSpacing.sm) {
+                    pillRow
+
                     Text(capture.title)
                         .font(CaptureFont.headingLg)
                         .foregroundStyle(CaptureColors.text)
-
-                    HStack(spacing: CaptureSpacing.sm) {
-                        Text(capture.methodLabel)
-                            .font(CaptureFont.monoSm)
-                            .foregroundStyle(CaptureColors.textTertiary)
-                        Text("·").foregroundStyle(CaptureColors.textHint)
-                        RelativeTimeText(date: capture.timeCaptured)
-                    }
-
-                    if !capture.tags.isEmpty {
-                        FlowLayout(spacing: CaptureSpacing.tagGap) {
-                            ForEach(capture.tags, id: \.self) { tag in
-                                Text(tag)
-                                    .font(CaptureFont.monoXs)
-                                    .foregroundStyle(CaptureColors.textTertiary)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(CaptureColors.text.opacity(0.03), in: RoundedRectangle(cornerRadius: CaptureRadius.sm))
-                            }
-                        }
-                    }
                 }
-
-                if capture.content != nil || capture.captureMethod == "note" {
-                    contentSection
-                }
-
-                if !capture.extractedData.isEmpty {
-                    detailExtractedData
-                }
-
-                Spacer(minLength: CaptureSpacing.lg)
-
-                Button(role: .destructive) {
-                    showDeleteConfirm = true
-                } label: {
-                    HStack {
-                        Image(systemName: "trash")
-                            .font(.system(size: 14))
-                        Text("Delete Capture")
-                            .font(CaptureFont.caption)
-                            .fontWeight(.semibold)
-                    }
-                    .foregroundStyle(CaptureColors.danger)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(CaptureColors.dangerMuted, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
-                }
-                .buttonStyle(.plain)
             }
             .padding(CaptureSpacing.screenHorizontalFeature)
             .padding(.bottom, CaptureSpacing.xxxl)
         }
-        .background(CaptureColors.bg)
-        .navigationBarTitleDisplayMode(.inline)
-        .preferredColorScheme(.light)
-        .onAppear { editedContent = originalContent }
-        .fullScreenCover(isPresented: $showFullscreenImage) {
-            FullscreenImageView(url: URL(string: capture.imageUrl ?? ""))
-        }
-        .alert("Delete Capture", isPresented: $showDeleteConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) {
-                Task {
-                    await captureHistory.deleteCapture(id: capture.id)
-                    dismiss()
-                }
-            }
-        } message: {
-            Text("Are you sure you want to delete this capture? This cannot be undone.")
+    }
+
+    // MARK: - Pills
+
+    private var pillRow: some View {
+        HStack(spacing: CaptureSpacing.sm) {
+            categoryPill
+            Spacer(minLength: CaptureSpacing.sm)
+            detailsPill
         }
     }
 
-    // MARK: - Content Section
-
-    @ViewBuilder
-    private var contentSection: some View {
-        VStack(alignment: .leading, spacing: CaptureSpacing.sm) {
-            HStack(spacing: 4) {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 12))
-                Text("CONTENT")
-                    .font(CaptureFont.monoSection)
-                    .tracking(0.5)
-            }
-            .foregroundStyle(CaptureColors.textTertiary)
-
-            TextEditor(text: $editedContent)
-                .font(CaptureFont.body)
-                .foregroundStyle(CaptureColors.text)
-                .scrollContentBackground(.hidden)
-                .padding(CaptureSpacing.md)
-                .frame(minHeight: 100)
-                .background(CaptureColors.surface, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
-                .overlay(
-                    RoundedRectangle(cornerRadius: CaptureRadius.md)
-                        .stroke(contentHasChanged ? CaptureColors.primary.opacity(0.3) : CaptureColors.border)
-                )
-
-            if showReanalyzingBanner {
-                HStack(spacing: 8) {
-                    ProgressView().scaleEffect(0.7).tint(CaptureColors.primary)
-                    Text("Re-analyzing capture...")
-                        .font(CaptureFont.bodySm)
-                        .foregroundStyle(CaptureColors.textSecondary)
-                }
-                .padding(.vertical, 4)
-            }
-
-            if contentHasChanged {
-                Button {
-                    saveContent()
-                } label: {
-                    HStack(spacing: 6) {
-                        if isSavingContent {
-                            ProgressView().scaleEffect(0.7).tint(.white)
-                        } else {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.system(size: 14))
-                        }
-                        Text("Save & Re-analyze")
-                            .font(CaptureFont.caption)
-                            .fontWeight(.semibold)
-                    }
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(CaptureColors.primary, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
-                }
-                .buttonStyle(.plain)
-                .disabled(isSavingContent)
-            }
+    private var categoryPill: some View {
+        HStack(spacing: 6) {
+            Image(systemName: capture.categoryIcon)
+                .font(.system(size: 10, weight: .semibold))
+            Text(capture.categoryLabel.uppercased())
+                .font(CaptureFont.monoSection)
+                .tracking(0.8)
         }
+        .foregroundStyle(CaptureColors.primary)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(CaptureColors.primaryMuted, in: Capsule())
+    }
+
+    private var detailsPill: some View {
+        Button {
+            showDetailsSheet = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("SEE DETAILS")
+                    .font(CaptureFont.monoSection)
+                    .tracking(0.8)
+            }
+            .foregroundStyle(CaptureColors.primary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(CaptureColors.primaryMuted, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Shared helpers
+
+    private var reanalyzingBanner: some View {
+        HStack(spacing: 10) {
+            ProgressView().scaleEffect(0.7).tint(CaptureColors.primary)
+            Text("Re-analyzing capture...")
+                .font(CaptureFont.bodySm)
+                .fontWeight(.medium)
+                .foregroundStyle(CaptureColors.textSecondary)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(CaptureColors.surface, in: RoundedRectangle(cornerRadius: CaptureRadius.lg))
     }
 
     private func saveContent() {
         guard let userID = AppleAuthManager.shared.getUserID() else { return }
+        guard contentHasChanged else { return }
         isSavingContent = true
         Task {
             let success = await APIService.shared.updateCaptureContent(
@@ -604,42 +631,127 @@ struct CaptureDetailView: View {
         }
     }
 
-    @ViewBuilder
-    private var detailExtractedData: some View {
-        let pairs = allExtractedPairs
-        if !pairs.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 4) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 12))
-                    Text("EXTRACTED")
-                        .font(CaptureFont.monoSection)
-                        .tracking(0.5)
-                }
-                .foregroundStyle(CaptureColors.primary)
+}
 
-                ForEach(pairs, id: \.key) { pair in
-                    HStack {
-                        Text(pair.key.capitalized)
-                            .font(CaptureFont.bodySm)
-                            .foregroundStyle(CaptureColors.textTertiary)
-                        Spacer()
-                        Text(pair.value)
-                            .font(CaptureFont.bodySm)
-                            .fontWeight(.medium)
-                            .foregroundStyle(CaptureColors.text)
-                            .lineLimit(1)
+// MARK: - Capture Details Sheet
+
+struct CaptureDetailsSheet: View {
+    let capture: Capture
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: CaptureSpacing.lg) {
+                    infoSection
+
+                    if !extractedPairs.isEmpty {
+                        extractedSection
                     }
-                    .padding(.vertical, 3)
+                }
+                .padding(CaptureSpacing.screenHorizontalFeature)
+                .padding(.top, CaptureSpacing.sm)
+                .padding(.bottom, CaptureSpacing.xxxl)
+            }
+            .background(CaptureColors.bg)
+            .navigationTitle("Details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(CaptureColors.primary)
                 }
             }
-            .padding(CaptureSpacing.extractedPadding)
-            .background(CaptureColors.primaryMuted, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
-            .overlay(RoundedRectangle(cornerRadius: CaptureRadius.md).stroke(CaptureColors.primary.opacity(0.05)))
         }
     }
 
-    private var allExtractedPairs: [(key: String, value: String)] {
+    // MARK: - Static Capture Columns
+
+    private var infoSection: some View {
+        VStack(alignment: .leading, spacing: CaptureSpacing.sm) {
+            detailRow(label: "Category", value: capture.categoryLabel)
+            separator
+            detailRow(label: "Source", value: capture.methodLabel)
+            separator
+            detailRow(label: "Captured", value: capturedDateString)
+            if !capture.tags.isEmpty {
+                separator
+                tagsRow
+            }
+        }
+        .padding(CaptureSpacing.base)
+        .background(CaptureColors.card, in: RoundedRectangle(cornerRadius: CaptureRadius.lg))
+        .overlay(RoundedRectangle(cornerRadius: CaptureRadius.lg).stroke(CaptureColors.border, lineWidth: 0.5))
+    }
+
+    private func detailRow(label: String, value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .font(CaptureFont.bodySm)
+                .foregroundStyle(CaptureColors.textTertiary)
+            Spacer()
+            Text(value)
+                .font(CaptureFont.bodySm)
+                .fontWeight(.medium)
+                .foregroundStyle(CaptureColors.text)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private var tagsRow: some View {
+        HStack(alignment: .top, spacing: CaptureSpacing.sm) {
+            Text("Tags")
+                .font(CaptureFont.bodySm)
+                .foregroundStyle(CaptureColors.textTertiary)
+            Spacer(minLength: 0)
+            HStack(spacing: CaptureSpacing.tagGap) {
+                ForEach(capture.tags, id: \.self) { tag in
+                    Text(tag)
+                        .font(CaptureFont.monoXs)
+                        .foregroundStyle(CaptureColors.textTertiary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(CaptureColors.text.opacity(0.03), in: RoundedRectangle(cornerRadius: CaptureRadius.sm))
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var separator: some View {
+        Rectangle()
+            .fill(CaptureColors.border)
+            .frame(height: 1)
+    }
+
+    // MARK: - AI-Extracted
+
+    private var extractedSection: some View {
+        VStack(alignment: .leading, spacing: CaptureSpacing.sm) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12))
+                Text("EXTRACTED")
+                    .font(CaptureFont.monoSection)
+                    .tracking(0.8)
+            }
+            .foregroundStyle(CaptureColors.primary)
+
+            VStack(alignment: .leading, spacing: CaptureSpacing.sm) {
+                ForEach(Array(extractedPairs.enumerated()), id: \.element.key) { index, pair in
+                    detailRow(label: pair.key.replacingOccurrences(of: "_", with: " ").capitalized, value: pair.value)
+                    if index < extractedPairs.count - 1 {
+                        separator
+                    }
+                }
+            }
+            .padding(CaptureSpacing.base)
+            .background(CaptureColors.primaryMuted, in: RoundedRectangle(cornerRadius: CaptureRadius.lg))
+            .overlay(RoundedRectangle(cornerRadius: CaptureRadius.lg).stroke(CaptureColors.primary.opacity(0.08)))
+        }
+    }
+
+    private var extractedPairs: [(key: String, value: String)] {
         capture.extractedData.compactMap { key, value in
             if key == "tags" || key == "content" { return nil }
             let str = "\(value)"
@@ -647,6 +759,12 @@ struct CaptureDetailView: View {
             return (key: key, value: str)
         }
         .sorted { $0.key < $1.key }
+    }
+
+    private var capturedDateString: String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "EEEE, MMM d · h:mm a"
+        return fmt.string(from: capture.timeCaptured)
     }
 }
 

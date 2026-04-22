@@ -16,17 +16,17 @@ struct ProfileView: View {
 
     var body: some View {
         ZStack {
-            Color.white.ignoresSafeArea()
+            CaptureColors.bg.ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 20) {
+                VStack(spacing: CaptureSpacing.lg) {
                     headerView
                     profileCard
                     tagsRow
                     calendarSection
                     footerLink
                 }
-                .padding(.top, 8)
+                .padding(.top, CaptureSpacing.sm)
                 .padding(.bottom, 100)
             }
         }
@@ -56,47 +56,56 @@ struct ProfileView: View {
     private var headerView: some View {
         HStack {
             Text("Profile")
-                .font(.system(size: 32, weight: .bold))
+                .font(CaptureFont.display)
+                .foregroundStyle(CaptureColors.text)
+                .tracking(-0.5)
             Spacer()
             Button(action: { showSetupPopup = true }) {
                 Text("Setup")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(CaptureFont.caption)
+                    .fontWeight(.semibold)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
-                    .background(Color.black, in: Capsule())
+                    .background(CaptureColors.primary, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
     }
 
     // MARK: - Profile Card
 
     private var profileCard: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: CaptureSpacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(authManager.currentUser?.displayName ?? "User")
-                    .font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                    .font(CaptureFont.title)
+                    .foregroundStyle(CaptureColors.text)
+                    .lineLimit(1)
                 Text(authManager.currentUser?.displayEmail ?? "")
-                    .font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(CaptureFont.bodySm)
+                    .foregroundStyle(CaptureColors.textSecondary)
+                    .lineLimit(1)
             }
             Spacer()
             Button("Manage") {
                 PostHogSDK.shared.capture("manage_account_opened")
                 showManageSheet = true
             }
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(.black)
+            .font(CaptureFont.caption)
+            .fontWeight(.semibold)
+            .foregroundStyle(CaptureColors.text)
             .padding(.horizontal, 14).padding(.vertical, 8)
-            .background(Color.white, in: Capsule())
-            .overlay(Capsule().stroke(Color.black.opacity(0.15), lineWidth: 1))
+            .background(CaptureColors.card, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
+            .overlay(RoundedRectangle(cornerRadius: CaptureRadius.md).stroke(CaptureColors.borderStrong))
             .buttonStyle(.plain)
         }
-        .padding(16)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08)))
-        .padding(.horizontal, 20)
+        .padding(CaptureSpacing.base)
+        .background(CaptureColors.card, in: RoundedRectangle(cornerRadius: CaptureRadius.lg))
+        .overlay(RoundedRectangle(cornerRadius: CaptureRadius.lg).stroke(CaptureColors.border, lineWidth: 0.5))
+        .captureShadow(.card)
+        .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
     }
 
     // MARK: - Tags Row
@@ -105,31 +114,32 @@ struct ProfileView: View {
         Button {
             showTagsSheet = true
         } label: {
-            HStack(spacing: 12) {
+            HStack(spacing: CaptureSpacing.md) {
                 Image(systemName: "tag")
                     .font(.system(size: 16))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(CaptureColors.text)
                     .frame(width: 32, height: 32)
-                    .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 8))
+                    .background(CaptureColors.surface, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Manage Tags")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(CaptureFont.title)
+                        .foregroundStyle(CaptureColors.text)
                     Text("Add, remove, or organize your tags")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                        .font(CaptureFont.body)
+                        .foregroundStyle(CaptureColors.textSecondary)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(CaptureColors.textTertiary)
             }
-            .padding(16)
-            .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08)))
+            .padding(CaptureSpacing.base)
+            .background(CaptureColors.card, in: RoundedRectangle(cornerRadius: CaptureRadius.lg))
+            .overlay(RoundedRectangle(cornerRadius: CaptureRadius.lg).stroke(CaptureColors.border, lineWidth: 0.5))
+            .captureShadow(.card)
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, CaptureSpacing.screenHorizontalFeature)
     }
 
     // MARK: - Calendar Section
@@ -149,12 +159,12 @@ struct ProfileView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "bubble.left").font(.system(size: 12))
-                Text("Send Feedback").font(.system(size: 13))
+                Text("Send Feedback").font(CaptureFont.body)
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(CaptureColors.textSecondary)
         }
         .buttonStyle(.plain)
-        .padding(.top, 8)
+        .padding(.top, CaptureSpacing.sm)
     }
 }
 
@@ -167,14 +177,16 @@ struct ManageAccountSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
+            VStack(spacing: CaptureSpacing.xl) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Display Name")
-                        .font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+                        .font(CaptureFont.bodySm)
+                        .fontWeight(.medium)
+                        .foregroundStyle(CaptureColors.textSecondary)
                     TextField("Your name", text: $nameText)
-                        .font(.system(size: 16))
-                        .padding(12)
-                        .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 10))
+                        .font(CaptureFont.title)
+                        .padding(CaptureSpacing.md)
+                        .background(CaptureColors.surface, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
                 }
 
                 Button {
@@ -182,27 +194,28 @@ struct ManageAccountSheet: View {
                     dismiss()
                 } label: {
                     Text("Save")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(CaptureFont.caption)
+                        .fontWeight(.semibold)
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity).frame(height: 48)
-                        .background(.black, in: RoundedRectangle(cornerRadius: 12))
+                        .background(CaptureColors.primary, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
                 }
                 .buttonStyle(.plain)
 
-                Divider()
+                Divider().foregroundStyle(CaptureColors.border)
 
                 Button(role: .destructive) {
                     authManager.signOut()
                     dismiss()
                 } label: {
                     Text("Sign Out")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.red)
+                        .font(CaptureFont.title)
+                        .foregroundStyle(CaptureColors.danger)
                 }
 
                 Spacer()
             }
-            .padding(20)
+            .padding(CaptureSpacing.screenHorizontalFeature)
             .navigationTitle("Manage Account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -235,10 +248,11 @@ struct SetupSheet: View {
                                 ShortcutManager.shared.installShortcut()
                             } label: {
                                 Text("Install Shortcut")
-                                    .font(.system(size: 14, weight: .semibold))
+                                    .font(CaptureFont.caption)
+                                    .fontWeight(.semibold)
                                     .foregroundStyle(.white)
-                                    .padding(.horizontal, 16).padding(.vertical, 10)
-                                    .background(.black, in: Capsule())
+                                    .padding(.horizontal, 18).padding(.vertical, 10)
+                                    .background(CaptureColors.primary, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
                             }
                             .buttonStyle(.plain)
                         }
@@ -277,17 +291,19 @@ struct SetupSheet: View {
     ) -> some View {
         HStack(alignment: .top, spacing: 14) {
             Text("\(number)")
-                .font(.system(size: 14, weight: .bold))
+                .font(CaptureFont.bodySm)
+                .fontWeight(.bold)
                 .foregroundStyle(.white)
                 .frame(width: 28, height: 28)
-                .background(.black, in: Circle())
+                .background(CaptureColors.primary, in: Circle())
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(CaptureFont.title)
+                    .foregroundStyle(CaptureColors.text)
                 Text(description)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
+                    .font(CaptureFont.bodySm)
+                    .foregroundStyle(CaptureColors.textSecondary)
                 action()
             }
         }
@@ -311,15 +327,15 @@ struct ManageTagsSheet: View {
 
                 ScrollView {
                     if tagManager.tags.isEmpty && !tagManager.isLoading {
-                        VStack(spacing: 8) {
+                        VStack(spacing: CaptureSpacing.sm) {
                             Text("No tags yet")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(.secondary)
+                                .font(CaptureFont.heading)
+                                .foregroundStyle(CaptureColors.textSecondary)
                             Text("Add tags to organize your captures.")
-                                .font(.system(size: 14))
-                                .foregroundStyle(.tertiary)
+                                .font(CaptureFont.bodySm)
+                                .foregroundStyle(CaptureColors.textTertiary)
                         }
-                        .padding(.top, 40)
+                        .padding(.top, CaptureSpacing.xxxl)
                     } else {
                         FlowLayout(spacing: 8) {
                             ForEach(tagManager.tags) { tag in
@@ -346,9 +362,9 @@ struct ManageTagsSheet: View {
     private var addTagField: some View {
         HStack(spacing: 10) {
             TextField("New tag name", text: $newTagName)
-                .font(.system(size: 15))
+                .font(CaptureFont.title)
                 .padding(10)
-                .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 10))
+                .background(CaptureColors.surface, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
                 .submitLabel(.done)
                 .onSubmit { addTag() }
 
@@ -361,8 +377,8 @@ struct ManageTagsSheet: View {
                     .frame(width: 36, height: 36)
                     .background(
                         newTagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? Color.gray : Color.black,
-                        in: RoundedRectangle(cornerRadius: 10)
+                            ? CaptureColors.textTertiary : CaptureColors.primary,
+                        in: RoundedRectangle(cornerRadius: CaptureRadius.md)
                     )
             }
             .buttonStyle(.plain)
@@ -373,19 +389,20 @@ struct ManageTagsSheet: View {
     private func tagChip(_ tag: APIService.UserTag) -> some View {
         HStack(spacing: 4) {
             Text(tag.name)
-                .font(.system(size: 14, weight: .medium))
+                .font(CaptureFont.monoXs)
+                .foregroundStyle(CaptureColors.textTertiary)
             Button {
                 Task { await tagManager.deleteTag(id: tag.id) }
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(CaptureColors.textTertiary)
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color(.systemGray6), in: Capsule())
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(CaptureColors.text.opacity(0.03), in: RoundedRectangle(cornerRadius: CaptureRadius.sm))
     }
 
     private func addTag() {

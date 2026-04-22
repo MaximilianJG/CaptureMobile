@@ -127,11 +127,18 @@ final class PendingJobManager: ObservableObject {
                 await CaptureHistoryManager.shared.loadCaptures()
             }
 
-            if let capture = jobStatus.capture {
+            if let record = jobStatus.capture {
                 sendLocalNotification(
                     title: "Capture Saved",
-                    body: capture.captureTitle
+                    body: record.captureTitle
                 )
+
+                if record.category == "event" {
+                    let capture = Capture(from: record)
+                    Task {
+                        await CalendarService.shared.createEventFromCapture(capture)
+                    }
+                }
             }
 
         case "failed":

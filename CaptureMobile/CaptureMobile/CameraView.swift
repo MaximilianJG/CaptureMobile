@@ -105,52 +105,54 @@ struct CameraView: View {
     // MARK: - Permission Views
 
     private var permissionRequestView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: CaptureSpacing.lg) {
             Image(systemName: "camera.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.white.opacity(0.6))
             Text("Camera Access Required")
-                .font(.system(size: 20, weight: .semibold))
+                .font(CaptureFont.headingLg)
                 .foregroundStyle(.white)
             Text("Allow camera access to capture events, flyers, and schedules.")
-                .font(.system(size: 15))
+                .font(CaptureFont.body)
                 .foregroundStyle(.white.opacity(0.7))
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+                .padding(.horizontal, CaptureSpacing.xxxl)
             Button("Allow Camera") {
                 Task { await cameraManager.requestPermission() }
             }
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.black)
-            .padding(.horizontal, 28)
-            .padding(.vertical, 12)
-            .background(.white, in: Capsule())
+            .font(CaptureFont.caption)
+            .fontWeight(.semibold)
+            .foregroundStyle(CaptureColors.text)
+            .padding(.horizontal, CaptureSpacing.xxl)
+            .padding(.vertical, CaptureSpacing.md)
+            .background(.white, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
         }
     }
 
     private var permissionDeniedView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: CaptureSpacing.lg) {
             Image(systemName: "camera.badge.ellipsis")
                 .font(.system(size: 48))
                 .foregroundStyle(.white.opacity(0.6))
             Text("Camera Access Denied")
-                .font(.system(size: 20, weight: .semibold))
+                .font(CaptureFont.headingLg)
                 .foregroundStyle(.white)
             Text("Enable camera access in Settings to capture photos.")
-                .font(.system(size: 15))
+                .font(CaptureFont.body)
                 .foregroundStyle(.white.opacity(0.7))
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+                .padding(.horizontal, CaptureSpacing.xxxl)
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
                 }
             }
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.black)
-            .padding(.horizontal, 28)
-            .padding(.vertical, 12)
-            .background(.white, in: Capsule())
+            .font(CaptureFont.caption)
+            .fontWeight(.semibold)
+            .foregroundStyle(CaptureColors.text)
+            .padding(.horizontal, CaptureSpacing.xxl)
+            .padding(.vertical, CaptureSpacing.md)
+            .background(.white, in: RoundedRectangle(cornerRadius: CaptureRadius.md))
         }
     }
 

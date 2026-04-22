@@ -30,6 +30,15 @@ enum Tab: Int, CaseIterable {
         case .profile:  return "person.fill"
         }
     }
+
+    var label: String {
+        switch self {
+        case .notes:    return "Notes"
+        case .camera:   return "Camera"
+        case .captures: return "Captures"
+        case .profile:  return "Profile"
+        }
+    }
 }
 
 struct FloatingTabBar: View {
@@ -38,24 +47,27 @@ struct FloatingTabBar: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Tab.allCases, id: \.rawValue) { tab in
+                let isActive = selectedTab == tab
                 Button {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                         selectedTab = tab
                     }
                 } label: {
-                    Image(systemName: selectedTab == tab ? tab.selectedIcon : tab.icon)
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundColor(selectedTab == tab ? .primary : .secondary.opacity(0.5))
+                    Image(systemName: isActive ? tab.selectedIcon : tab.icon)
+                        .font(.system(size: 22))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(isActive ? CaptureColors.primary : CaptureColors.textTertiary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, CaptureSpacing.sm)
         .padding(.vertical, 6)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
-        .padding(.horizontal, 40)
+        .background(CaptureColors.card, in: Capsule())
+        .overlay(Capsule().stroke(CaptureColors.border, lineWidth: 0.5))
+        .captureShadow(.floating)
+        .padding(.horizontal, CaptureSpacing.base)
     }
 }

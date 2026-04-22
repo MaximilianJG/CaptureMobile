@@ -26,8 +26,7 @@ struct MainTabView: View {
                 NotesView(
                     noteText: $noteText,
                     isSending: isSending,
-                    onSend: { sendContent() },
-                    onDismiss: { noteText = "" }
+                    onSend: { sendContent() }
                 ).tag(Tab.notes)
                 CameraView(capturedPreview: $capturedPreview).tag(Tab.camera)
                 HomeView().tag(Tab.captures)
@@ -38,9 +37,11 @@ struct MainTabView: View {
             .allowsHitTesting(capturedPreview == nil)
 
             Group {
-                if hasCameraContent { sendDismissBar }
-                else if selectedTab == .notes && hasNoteContent { EmptyView() }
-                else { FloatingTabBar(selectedTab: $selectedTab) }
+                if hasCameraContent {
+                    sendDismissBar
+                } else {
+                    FloatingTabBar(selectedTab: $selectedTab)
+                }
             }
             .padding(.bottom, 16)
         }
@@ -54,7 +55,7 @@ struct MainTabView: View {
             Button { dismissContent() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(.primary)
+                    .foregroundColor(CaptureColors.text)
                     .frame(width: 52).padding(.vertical, 10)
             }
             .buttonStyle(.plain)
@@ -64,21 +65,22 @@ struct MainTabView: View {
                     if isSending {
                         ProgressView().scaleEffect(0.75).tint(.white)
                     } else {
-                        Text("Send").font(.system(size: 15, weight: .semibold))
+                        Text("Send").font(CaptureFont.caption).fontWeight(.semibold)
                         Image(systemName: "arrow.right").font(.system(size: 13, weight: .semibold))
                     }
                 }
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity).padding(.vertical, 10)
-                .background(Color.black, in: Capsule())
+                .background(CaptureColors.primary, in: Capsule())
             }
             .buttonStyle(.plain)
             .disabled(isSending)
         }
-        .padding(.horizontal, 8).padding(.vertical, 6)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
-        .padding(.horizontal, 40)
+        .padding(.horizontal, CaptureSpacing.sm).padding(.vertical, 6)
+        .background(CaptureColors.card, in: Capsule())
+        .overlay(Capsule().stroke(CaptureColors.border, lineWidth: 0.5))
+        .captureShadow(.floating)
+        .padding(.horizontal, CaptureSpacing.base)
         .transition(.opacity)
     }
 
